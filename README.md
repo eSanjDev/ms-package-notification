@@ -35,7 +35,7 @@ NOTIFICATION_TOKEN_CACHE_KEY=notif_token    # default: esanj_notification_access
 NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log channel
 ```
 
-Full config reference (`config/notification-client.php`):
+Full config reference (`config/esanj/notification.php`):
 
 ```php
 return [
