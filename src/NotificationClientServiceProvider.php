@@ -15,7 +15,7 @@ class NotificationClientServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/esanj/notification.php', 'esanj.notification');
+        $this->mergeConfigFrom(__DIR__ . '/../config/notification.php', 'esanj.notification');
 
         $this->app->singleton(TokenManagerInterface::class, function ($app) {
             $config = $app['config']['esanj']['notification'];
