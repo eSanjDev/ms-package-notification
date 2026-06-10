@@ -39,7 +39,7 @@ Full config reference (`config/esanj/notification.php`):
 
 ```php
 return [
-    'base_url'      => env('NOTIFICATION_SERVICE_URL'),
+    'base_url'      => env('NOTIFICATION_SERVICE_URL', 'http://localhost'),
     'client_id'     => env('NOTIFICATION_CLIENT_ID'),
     'client_secret' => env('NOTIFICATION_CLIENT_SECRET'),
 
@@ -426,6 +426,12 @@ $notifier = new NotificationClient($apiClient);
 | `progressPercentage()` | `float` | Computed progress 0–100 |
 
 ---
+
+## Documentation
+
+For a complete, beginner-friendly, step-by-step walkthrough — installing, sending your first notification,
+building **custom payloads**, swapping the client implementation, testing, and troubleshooting — see
+**[docs/GUIDE.md](docs/GUIDE.md)**.
 
 ## Changelog
 
