@@ -1,0 +1,744 @@
+# 📚 Esanj Notification Client — Complete Beginner's Guide
+
+This guide assumes **you have never used this package before**. It explains everything in plain language, step by
+step, with copy-paste code. If you can edit a `.env` file and write a few lines of PHP, you can follow along.
+
+> 💡 This package is a **client**. It does not send SMS/email/push itself — it talks (over HTTP) to the **Esanj
+> Notification microservice**, which does the actual sending. Think of this package as a friendly remote control
+> for that service.
+
+---
+
+## Table of Contents
+
+1. [What this package does](#1-what-this-package-does)
+2. [How it works (the big picture)](#2-how-it-works-the-big-picture)
+3. [Installation](#3-installation)
+4. [Configuration & `.env`](#4-configuration--env)
+5. [Two ways to call the client](#5-two-ways-to-call-the-client)
+6. [Your first notification (SMS)](#6-your-first-notification-sms)
+7. [Sending each channel](#7-sending-each-channel)
+8. [Choosing a provider, priority, tags & options](#8-choosing-a-provider-priority-tags--options)
+9. [Sending in bulk (batches)](#9-sending-in-bulk-batches)
+10. [Reading notifications back (querying & paging)](#10-reading-notifications-back-querying--paging)
+11. [Providers & tags](#11-providers--tags)
+12. [Handling errors safely](#12-handling-errors-safely)
+13. [Recipe: Create your own custom payload](#13-recipe-create-your-own-custom-payload)
+14. [Recipe: Replace or wrap the client](#14-recipe-replace-or-wrap-the-client)
+15. [Testing without hitting the real service](#15-testing-without-hitting-the-real-service)
+16. [Configuration reference](#16-configuration-reference)
+17. [API endpoints used](#17-api-endpoints-used)
+18. [Troubleshooting](#18-troubleshooting)
+19. [Cheat sheet](#19-cheat-sheet)
+
+---
+
+## 1. What this package does
+
+Once installed and configured, it lets your Laravel app:
+
+- **Send notifications** — SMS, email, or push — with a single method call.
+- **Send in bulk** — one call to up to 5,000 recipients (a "batch").
+- **Check status** — look up a notification or batch later to see if it was sent/failed.
+- **List** your providers and tags.
+
+It also handles the boring, error-prone parts for you: logging in to the service (OAuth tokens), caching that
+login, refreshing it when it expires, and retrying failed requests.
+
+---
+
+## 2. How it works (the big picture)
+
+You only ever touch a few things. Here's the whole package in one table:
+
+| You use…            | What it is                                                        |
+|---------------------|------------------------------------------------------------------|
+| **`Notifier` / `NotificationClientInterface`** | The main entry point. You call `send()`, `sendBatch()`, etc. on it. |
+| **Payload classes** | Describe *what* to send (`SmsPayload`, `EmailPayload`, `PushPayload`, `SmsPatternPayload`, `TemplatePayload`). |
+| **`SendNotificationData`** | Wraps the payload + *who* to send to + options, and hands it to the client. |
+| **Resource classes** | The typed objects you get **back** (`NotificationResource`, `BatchResource`, etc.). |
+
+Behind the scenes (you normally never touch these):
+
+| Hidden part      | Job                                                                          |
+|------------------|------------------------------------------------------------------------------|
+| `TokenManager`   | Logs in to the service, caches the access token, refreshes it when expired.  |
+| `ApiClient`      | Makes the HTTP calls, adds the token header, retries on failure.             |
+| `Token`          | A small value object holding the access token and its expiry.                |
+
+**Mental model of one send:**
+
+```
+Your code → SendNotificationData(payload) → Notifier::send()
+          → ApiClient (adds token, POSTs JSON) → Notification microservice
+          → you get back a NotificationResource ($notification->uuid, ->status, ...)
+```
+
+---
+
+## 3. Installation
+
+In your project root:
+
+```bash
+composer require esanj/notification-client
+```
+
+Publish the config file:
+
+```bash
+php artisan vendor:publish --tag=notification-config
+```
+
+This creates `config/esanj/notification.php`. Laravel auto-registers the package and the `Notifier` facade — no
+manual setup needed.
+
+> ✅ **Requirements:** PHP 8.2+ and Laravel 12 or 13.
+
+---
+
+## 4. Configuration & `.env`
+
+You **must** set three values. Add them to your `.env` (ask your Esanj admin for the values):
+
+```env
+NOTIFICATION_SERVICE_URL=https://notification.your-domain.com
+NOTIFICATION_CLIENT_ID=your-client-id
+NOTIFICATION_CLIENT_SECRET=your-client-secret
+```
+
+Everything else is optional and has sensible defaults:
+
+```env
+# Optional
+NOTIFICATION_TOKEN_CACHE_STORE=redis        # default: your app's default cache store
+NOTIFICATION_TOKEN_CACHE_KEY=notif_token    # default: esanj_notification_access_token
+NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log channel
+```
+
+> ⚠️ If you change config, run `php artisan config:clear` so Laravel picks it up.
+
+See the [Configuration reference](#16-configuration-reference) for every option.
+
+---
+
+## 5. Two ways to call the client
+
+Pick whichever you prefer — they do exactly the same thing.
+
+**A) Dependency Injection (recommended).** Type-hint the interface and Laravel hands you a ready-to-use client:
+
+```php
+use Esanj\NotificationClient\Contracts\NotificationClientInterface;
+
+class OrderService
+{
+    public function __construct(
+        private readonly NotificationClientInterface $notifier
+    ) {}
+
+    public function notifyCustomer(): void
+    {
+        $this->notifier->send(/* ... */);
+    }
+}
+```
+
+**B) Facade.** Quick and global — no constructor needed:
+
+```php
+use Esanj\NotificationClient\Facades\Notifier;
+
+Notifier::send(/* ... */);
+```
+
+In the examples below, `$notifier` means "either an injected `NotificationClientInterface`, or the `Notifier`
+facade." They are interchangeable.
+
+---
+
+## 6. Your first notification (SMS)
+
+The simplest possible send — a plain SMS:
+
+```php
+use Esanj\NotificationClient\DTOs\SendNotificationData;
+use Esanj\NotificationClient\DTOs\Payloads\SmsPayload;
+
+$notification = $notifier->send(new SendNotificationData(
+    recipient: '+989123456789',
+    payload:   SmsPayload::fromMessage('Your OTP is 1234'),
+    channel:   'sms',
+));
+
+echo $notification->uuid;    // e.g. "550e8400-e29b-41d4-..."
+echo $notification->status;  // e.g. "pending"
+```
+
+**What just happened:**
+- `SmsPayload::fromMessage(...)` = *what* to send.
+- `SendNotificationData(...)` = the *who* (`recipient`), the *what* (`payload`), and the *how* (`channel`).
+- `send(...)` returns a `NotificationResource` — a typed object with the new notification's `uuid` and `status`.
+
+> 📌 Every `SendNotificationData` needs **either** a `channel` (`'sms'`, `'email'`, `'push'`) **or** a
+> `providerId`. See [section 8](#8-choosing-a-provider-priority-tags--options).
+
+---
+
+## 7. Sending each channel
+
+### SMS — pattern / template code (server-side template)
+
+Use this when the service stores the SMS text and you only supply variables:
+
+```php
+use Esanj\NotificationClient\DTOs\Payloads\SmsPatternPayload;
+
+$notifier->send(new SendNotificationData(
+    recipient: '+989123456789',
+    payload:   SmsPatternPayload::make('otp_pattern', ['code' => '1234', 'name' => 'John']),
+    channel:   'sms',
+));
+```
+
+### Email
+
+`EmailPayload` is a **builder** — chain the parts you need. Only `make()` is required; everything else is optional:
+
+```php
+use Esanj\NotificationClient\DTOs\Payloads\EmailPayload;
+
+$notifier->send(new SendNotificationData(
+    recipient: 'user@example.com',
+    payload:   EmailPayload::make()
+                   ->subject('Welcome to our platform')
+                   ->html('<h1>Hello, John!</h1><p>Your account is ready.</p>')
+                   ->text('Hello, John! Your account is ready.')   // plain-text fallback
+                   ->from('no-reply@example.com', 'Example')
+                   ->replyTo('support@example.com')
+                   ->cc(['manager@example.com'])
+                   ->bcc(['archive@example.com']),
+    channel:   'email',
+));
+```
+
+### Push
+
+```php
+use Esanj\NotificationClient\DTOs\Payloads\PushPayload;
+
+$notifier->send(new SendNotificationData(
+    recipient: 'device-fcm-token',
+    payload:   PushPayload::make()
+                   ->title('New Order')
+                   ->body('Your order #1234 has been confirmed.')
+                   ->url('https://app.example.com/orders/1234')
+                   ->data(['order_id' => 1234]),   // extra key/value data
+    channel:   'push',
+));
+```
+
+### Template (works for any channel)
+
+Use a template stored on the service, with variables and an optional language:
+
+```php
+use Esanj\NotificationClient\DTOs\Payloads\TemplatePayload;
+
+$notifier->send(new SendNotificationData(
+    recipient: 'user@example.com',
+    payload:   TemplatePayload::make('welcome_email')
+                   ->variables(['name' => 'John', 'plan' => 'Pro'])
+                   ->language('fa'),
+    channel:   'email',
+));
+```
+
+> 💡 **Builders are immutable.** Each method (`->subject()`, `->html()`, …) returns a **new copy**. So
+> `$p = EmailPayload::make(); $p->subject('Hi');` on its own does nothing — you must keep the returned value:
+> `$p = $p->subject('Hi');` (chaining, as shown above, already does this correctly).
+
+---
+
+## 8. Choosing a provider, priority, tags & options
+
+`SendNotificationData` accepts more than just recipient/payload/channel:
+
+| Parameter    | Type            | Default      | Meaning                                                            |
+|--------------|-----------------|--------------|--------------------------------------------------------------------|
+| `recipient`  | `string`        | *(required)* | Phone / email / device token.                                      |
+| `payload`    | `PayloadInterface` | *(required)* | One of the payload objects.                                     |
+| `channel`    | `string\|null`  | `null`       | `'sms'`, `'email'`, or `'push'`. **Required unless** `providerId` is set. |
+| `providerId` | `int\|null`     | `null`       | Send through a specific provider. Channel is inferred from it.     |
+| `priority`   | `string`        | `'medium'`   | `'low'`, `'medium'`, or `'high'`.                                  |
+| `tags`       | `string[]`      | `[]`         | Tag names to attach (the tags must already exist on the service). |
+| `options`    | `array`         | `[]`         | Extra options, e.g. `['lock_provider' => true]`.                  |
+
+**Target a specific provider** (channel is inferred, so you can omit it):
+
+```php
+$notifier->send(new SendNotificationData(
+    recipient:  '+989123456789',
+    payload:    SmsPayload::fromMessage('Hello!'),
+    providerId: 3,
+));
+```
+
+**Set priority and tags:**
+
+```php
+$notifier->send(new SendNotificationData(
+    recipient: '+989123456789',
+    payload:   SmsPayload::fromMessage('Promotion!'),
+    channel:   'sms',
+    priority:  'high',
+    tags:      ['marketing', 'summer-campaign'],
+));
+```
+
+**Pass extra options** (for example, force the message to stay on the chosen provider):
+
+```php
+$notifier->send(new SendNotificationData(
+    recipient:  '+989123456789',
+    payload:    SmsPayload::fromMessage('Hello!'),
+    providerId: 3,
+    options:    ['lock_provider' => true],
+));
+```
+
+---
+
+## 9. Sending in bulk (batches)
+
+Send the same payload to many recipients in one call:
+
+```php
+use Esanj\NotificationClient\DTOs\SendBatchNotificationData;
+use Esanj\NotificationClient\DTOs\Payloads\SmsPayload;
+
+$batch = $notifier->sendBatch(new SendBatchNotificationData(
+    recipients: ['+989111111111', '+989222222222', '+989333333333'], // up to 5000
+    payload:    SmsPayload::fromMessage('Hello everyone!'),
+    channel:    'sms',
+    priority:   'low',                  // batches default to 'low'
+    batchName:  'Summer Campaign 2025', // optional label
+    tags:       ['marketing'],
+));
+
+echo $batch->uuid;                  // the batch id — keep it to check progress later
+echo $batch->totalNotifications;    // 3
+echo $batch->progressPercentage();  // 0.0 right after queueing
+```
+
+`sendBatch` returns a `BatchResource`. Check on it later with `getBatch($uuid)` (see next section).
+
+---
+
+## 10. Reading notifications back (querying & paging)
+
+### Get one notification
+
+```php
+$notification = $notifier->getNotification('550e8400-e29b-41d4-a716-446655440000');
+
+if ($notification->isSent()) {
+    echo 'Sent at: ' . $notification->sentAt->toDateTimeString();
+}
+
+// Status helpers available on NotificationResource:
+$notification->isSent();     // status === 'sent'
+$notification->isFailed();   // status === 'failed'
+$notification->isPending();  // status is pending | queued | processing
+```
+
+### List notifications with filters
+
+```php
+use Esanj\NotificationClient\DTOs\NotificationFilter;
+
+$result = $notifier->listNotifications(new NotificationFilter(
+    perPage:    20,
+    status:     'sent',                  // optional
+    recipients: ['+989123456789'],       // optional
+));
+
+foreach ($result->items as $notification) {
+    echo $notification->uuid . ': ' . $notification->status . PHP_EOL;
+}
+
+echo "Page {$result->currentPage} of {$result->lastPage}, total: {$result->total}";
+```
+
+`listNotifications`, `listBatches`, and `listTags` all return a **`PaginatedResult`** with these properties:
+`items`, `total`, `perPage`, `currentPage`, `lastPage`, `from`, `to`, plus `hasMorePages()` and `isEmpty()`.
+
+**Loop through every page:**
+
+```php
+$page = 1;
+do {
+    $result = $notifier->listNotifications(new NotificationFilter(perPage: 50));
+    foreach ($result->items as $n) {
+        // process $n
+    }
+    $page++;
+} while ($result->hasMorePages());
+```
+
+### Batches
+
+```php
+$result = $notifier->listBatches(perPage: 10);   // PaginatedResult of BatchResource
+
+$batch = $notifier->getBatch('batch-uuid');
+echo $batch->progressPercentage() . '%';
+echo $batch->isCompleted() ? 'Done' : 'In progress';
+```
+
+---
+
+## 11. Providers & tags
+
+```php
+// Providers — returns a plain array of ProviderResource (not paginated)
+foreach ($notifier->listProviders() as $provider) {
+    echo "{$provider->providerName} ({$provider->providerChannel})" . PHP_EOL;
+}
+$one = $notifier->getProvider(3);
+
+// Tags — returns a PaginatedResult of TagResource
+$tags = $notifier->listTags(perPage: 50);
+foreach ($tags->items as $tag) {
+    echo "{$tag->name}: used {$tag->usedCount} times" . PHP_EOL;
+}
+$tag = $notifier->getTag(7);
+```
+
+---
+
+## 12. Handling errors safely
+
+Every exception this package throws extends `NotificationClientException`, so you can catch broadly or narrowly.
+
+```php
+use Esanj\NotificationClient\Exceptions\ApiException;
+use Esanj\NotificationClient\Exceptions\AuthenticationException;
+use Esanj\NotificationClient\Exceptions\NotificationClientException;
+
+try {
+    $notification = $notifier->send($data);
+
+} catch (AuthenticationException $e) {
+    // Could not log in / refresh the token (bad client id/secret, or service unreachable)
+    report($e);
+
+} catch (ApiException $e) {
+    if ($e->isValidationError()) {          // HTTP 422
+        $errors = $e->getErrors();          // e.g. ['recipient' => ['The recipient format is invalid.']]
+    }
+    // Always available on ApiException:
+    $e->statusCode;     // int  — e.g. 422, 404, 500, or 0 for connection errors
+    $e->responseBody;   // array — the decoded JSON error body
+    $e->isUnauthorized();   // 401
+    $e->isForbidden();      // 403
+    report($e);
+
+} catch (NotificationClientException $e) {
+    // Catch-all safety net for anything else from the package
+    report($e);
+}
+```
+
+| Exception                     | When it's thrown                                                       |
+|-------------------------------|------------------------------------------------------------------------|
+| `AuthenticationException`     | The token could not be fetched or refreshed.                           |
+| `ApiException`                | The API returned an error (validation 4xx, or a 5xx after all retries, or a connection failure). |
+| `NotificationClientException` | Base class — both of the above extend it.                              |
+
+> 🔁 **You don't need to retry yourself.** The client automatically retries `retry.attempts` times on `401/403`
+> (refreshing the token first), `5xx` server errors, and connection errors. An exception is only thrown once all
+> retries are exhausted (or immediately for non-retryable errors like `422`).
+
+---
+
+## 13. Recipe: Create your own custom payload
+
+This is the equivalent of "adding a new page" for this package. Every payload is just a class that implements one
+tiny interface:
+
+```php
+namespace Esanj\NotificationClient\Contracts;
+
+interface PayloadInterface
+{
+    public function toArray(): array;   // returns the JSON body the service expects
+}
+```
+
+So to support a payload shape the built-in classes don't cover, write your own. Example — a hypothetical "voice
+call" payload:
+
+**Step 1 — create the class** (anywhere in your app, e.g. `app/Notifications/Payloads/VoicePayload.php`):
+
+```php
+namespace App\Notifications\Payloads;
+
+use Esanj\NotificationClient\Contracts\PayloadInterface;
+
+final class VoicePayload implements PayloadInterface
+{
+    private function __construct(
+        private readonly string $text,
+        private readonly int $repeat,
+    ) {}
+
+    public static function make(string $text, int $repeat = 1): self
+    {
+        return new self($text, $repeat);
+    }
+
+    public function toArray(): array
+    {
+        // Must match exactly what the microservice expects for this channel.
+        return [
+            'voice' => [
+                'text'   => $this->text,
+                'repeat' => $this->repeat,
+            ],
+        ];
+    }
+}
+```
+
+**Step 2 — use it like any built-in payload:**
+
+```php
+use App\Notifications\Payloads\VoicePayload;
+
+$notifier->send(new SendNotificationData(
+    recipient: '+989123456789',
+    payload:   VoicePayload::make('Your code is 1234', repeat: 2),
+    channel:   'voice',
+));
+```
+
+That's it. Because `SendNotificationData` accepts **any** `PayloadInterface`, your class plugs straight in.
+
+> ✅ **Tip — copy the closest built-in.** Look at `src/DTOs/Payloads/` for a class similar to what you need
+> (`SmsPayload` for a simple value, `EmailPayload` for a fluent builder) and adapt its `toArray()` shape.
+
+---
+
+## 14. Recipe: Replace or wrap the client
+
+Sometimes you want to change how the client behaves globally — for example, to add logging around every send, or
+to swap in a fake during local development. Because the client is bound to an **interface** in the container, you
+can rebind it.
+
+**Wrap the real client** (decorator) — put this in a service provider's `register()`:
+
+```php
+use Esanj\NotificationClient\Contracts\NotificationClientInterface;
+
+$this->app->extend(NotificationClientInterface::class, function ($client, $app) {
+    return new LoggingNotificationClient($client); // your class implementing NotificationClientInterface
+});
+```
+
+**Replace it entirely** (e.g. a fake that records calls in tests):
+
+```php
+$this->app->singleton(NotificationClientInterface::class, fn () => new FakeNotificationClient());
+```
+
+Any code that injects `NotificationClientInterface` or uses the `Notifier` facade now gets your version — no other
+changes needed.
+
+---
+
+## 15. Testing without hitting the real service
+
+The package is built on Guzzle, so you can feed it a `MockHandler` and assert behavior without any network calls.
+Build the objects by hand with the same constructor arguments the service provider uses:
+
+```php
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Response;
+use Esanj\NotificationClient\Auth\TokenManager;
+use Esanj\NotificationClient\Http\ApiClient;
+use Esanj\NotificationClient\NotificationClient;
+
+$mock = new MockHandler([
+    // 1st HTTP call the client makes: fetch the token
+    new Response(200, [], json_encode([
+        'access_token' => 'test-token',
+        'token_type'   => 'Bearer',
+        'expires_in'   => 3600,
+    ])),
+    // 2nd call: the actual send
+    new Response(202, [], json_encode([
+        'data' => [
+            'uuid'       => 'test-uuid',
+            'status'     => 'pending',
+            'channel'    => 'sms',
+            'recipient'  => '+989123456789',
+            'batch_uuid' => null,
+            'sent_at'    => null,
+            'created_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+        ],
+    ])),
+]);
+
+$client = new Client(['handler' => HandlerStack::create($mock)]);
+
+$tokenManager = new TokenManager(
+    httpClient:    $client,
+    cache:         app(\Illuminate\Contracts\Cache\Repository::class),
+    logger:        app(\Psr\Log\LoggerInterface::class),
+    clientId:      'test-id',
+    clientSecret:  'test-secret',
+    tokenEndpoint: 'http://test/api/v1/oauth/token',
+    cacheKey:      'test_token',
+    bufferSeconds: 60,
+);
+
+$apiClient = new ApiClient(
+    httpClient:    $client,
+    tokenManager:  $tokenManager,
+    logger:        app(\Psr\Log\LoggerInterface::class),
+    baseUrl:       'http://test',
+    retryAttempts: 3,
+    retrySleepMs:  0,   // no real sleeping in tests
+);
+
+$notifier = new NotificationClient($apiClient);
+
+$result = $notifier->send(/* ... */);
+// assert on $result->uuid, $result->status, ...
+```
+
+> 💡 For most app-level tests, the easier path is [section 14](#14-recipe-replace-or-wrap-the-client): bind a
+> `FakeNotificationClient` and assert what your code asked it to send.
+
+---
+
+## 16. Configuration reference
+
+File: `config/esanj/notification.php`. Internally read via the key `esanj.notification`.
+
+| Key                      | Env variable                       | Default                              | What it does                                                  |
+|--------------------------|------------------------------------|--------------------------------------|--------------------------------------------------------------|
+| `base_url`               | `NOTIFICATION_SERVICE_URL`         | `http://localhost`                   | Base URL of the notification microservice.                   |
+| `client_id`              | `NOTIFICATION_CLIENT_ID`           | *(none)*                             | OAuth client id.                                             |
+| `client_secret`          | `NOTIFICATION_CLIENT_SECRET`       | *(none)*                             | OAuth client secret.                                        |
+| `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token.                    |
+| `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
+| `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires.   |
+| `retry.attempts`         | —                                  | `3`                                  | Total attempts per request (`1` = no retry).                 |
+| `retry.sleep_ms`         | —                                  | `1000`                               | Milliseconds to wait between retries.                        |
+| `timeout`                | —                                  | `30`                                 | HTTP request timeout, in seconds.                            |
+| `logging.channel`        | `NOTIFICATION_LOG_CHANNEL`         | `null` → app default channel         | Log channel for the package's warnings/errors.               |
+
+> To change `retry`, `timeout`, or `buffer_seconds`, edit `config/esanj/notification.php` directly (these have no
+> env shortcuts), then run `php artisan config:clear`.
+
+---
+
+## 17. API endpoints used
+
+For reference, here's exactly which microservice endpoints each method calls:
+
+| Method                   | HTTP   | Endpoint                                  |
+|--------------------------|--------|-------------------------------------------|
+| *(token fetch)*          | `POST` | `/api/v1/oauth/token`                     |
+| `send`                   | `POST` | `/api/v1/send`                            |
+| `sendBatch`              | `POST` | `/api/v1/send-batch`                      |
+| `getNotification`        | `GET`  | `/api/v1/notifications/{uuid}`            |
+| `listNotifications`      | `GET`  | `/api/v1/notifications`                   |
+| `getBatch`               | `GET`  | `/api/v1/notification-batches/{uuid}`     |
+| `listBatches`            | `GET`  | `/api/v1/notification-batches`            |
+| `listProviders`          | `GET`  | `/api/v1/client-providers`                |
+| `getProvider`            | `GET`  | `/api/v1/client-providers/{id}`           |
+| `listTags`               | `GET`  | `/api/v1/tags`                            |
+| `getTag`                 | `GET`  | `/api/v1/tags/{id}`                       |
+
+---
+
+## 18. Troubleshooting
+
+**`AuthenticationException: Could not authenticate...`**
+Your `NOTIFICATION_CLIENT_ID` / `NOTIFICATION_CLIENT_SECRET` are wrong, or `NOTIFICATION_SERVICE_URL` is
+unreachable. Double-check `.env`, then `php artisan config:clear`.
+
+**Changes to `.env` or config seem ignored.**
+Laravel caches config. Run `php artisan config:clear` (and `php artisan config:cache` again if you cache config in
+production).
+
+**`ApiException` with `isValidationError()` true (HTTP 422).**
+The service rejected your data. Inspect `$e->getErrors()` — it returns a field-by-field error map and usually tells
+you exactly what's wrong (bad recipient format, missing channel, unknown tag, etc.).
+
+**My SMS/email never arrives, but `send()` succeeded.**
+`send()` returning `status: 'pending'` only means the service **accepted** it for delivery. Check the real outcome
+later with `getNotification($uuid)` and `isSent()` / `isFailed()`.
+
+**"I set a value on a payload builder but it didn't apply."**
+Payload builders are immutable — each method returns a new object. Always keep the return value (use chaining), see
+the tip in [section 7](#7-sending-each-channel).
+
+**Requests are slow when the service is down.**
+That's the retry policy working. Lower `retry.attempts` and/or `retry.sleep_ms` in the config if you prefer to fail
+faster, or raise `timeout` if the service is just slow.
+
+---
+
+## 19. Cheat sheet
+
+```php
+// Send (pick a payload, wrap in SendNotificationData, call send)
+$notifier->send(new SendNotificationData(
+    recipient: '+989123456789',
+    payload:   SmsPayload::fromMessage('Hi'),
+    channel:   'sms',
+));
+
+// Batch
+$notifier->sendBatch(new SendBatchNotificationData(
+    recipients: ['+98911...', '+98922...'],
+    payload:    SmsPayload::fromMessage('Hi all'),
+    channel:    'sms',
+));
+
+// Look up
+$notifier->getNotification($uuid);
+$notifier->getBatch($batchUuid);
+$notifier->listNotifications(new NotificationFilter(status: 'sent'));
+
+// Meta
+$notifier->listProviders();
+$notifier->listTags(perPage: 50);
+```
+
+| Payload class       | Channel | How to build                                                            |
+|---------------------|---------|-------------------------------------------------------------------------|
+| `SmsPayload`        | SMS     | `SmsPayload::fromMessage('text')`                                       |
+| `SmsPatternPayload` | SMS     | `SmsPatternPayload::make('key', ['var' => 'val'])`                      |
+| `EmailPayload`      | Email   | `EmailPayload::make()->subject(...)->html(...)->text(...)`              |
+| `PushPayload`       | Push    | `PushPayload::make()->title(...)->body(...)->url(...)->data([...])`     |
+| `TemplatePayload`   | Any     | `TemplatePayload::make('key')->variables([...])->language('fa')`        |
+| *your own*          | Any     | implement `PayloadInterface::toArray()` — see [section 13](#13-recipe-create-your-own-custom-payload) |
+
+```bash
+# Common commands
+composer require esanj/notification-client
+php artisan vendor:publish --tag=notification-config
+php artisan config:clear
+```
+
+---
+
+Need the quick reference instead? See the [README](../README.md).
