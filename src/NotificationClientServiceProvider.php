@@ -47,6 +47,7 @@ class NotificationClientServiceProvider extends ServiceProvider
                 cacheKey:       $config['token']['cache_key'],
                 bufferSeconds:  (int) $config['token']['buffer_seconds'],
                 encrypter:      ($config['token']['encrypt'] ?? false) ? $app[Encrypter::class] : null,
+                httpTimeoutSeconds: (int) $config['timeout'],
             );
         });
 

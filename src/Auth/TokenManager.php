@@ -17,7 +17,7 @@ use Throwable;
 
 class TokenManager implements TokenManagerInterface
 {
-    private const LOCK_SECONDS = 15;
+    private const LOCK_GRACE_SECONDS = 5;
 
     private const LOCK_WAIT_SECONDS = 10;
 
@@ -39,6 +39,7 @@ class TokenManager implements TokenManagerInterface
         private readonly string $cacheKey,
         private readonly int $bufferSeconds,
         private readonly ?Encrypter $encrypter = null,
+        private readonly int $httpTimeoutSeconds = 30,
     ) {}
 
     public function getToken(): Token
@@ -58,7 +59,10 @@ class TokenManager implements TokenManagerInterface
             return $this->fetchToken();
         }
 
-        $lock = $store->lock($this->cacheKey . ':lock', self::LOCK_SECONDS);
+        $lock = $store->lock(
+            $this->cacheKey . ':lock',
+            max(1, $this->httpTimeoutSeconds) + self::LOCK_GRACE_SECONDS,
+        );
 
         try {
             return $lock->block(
