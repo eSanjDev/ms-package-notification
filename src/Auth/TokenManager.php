@@ -19,7 +19,13 @@ class TokenManager implements TokenManagerInterface
 
     private const LOCK_WAIT_SECONDS = 10;
 
+    private const REFRESH_STORM_THRESHOLD = 3;
+
+    private const REFRESH_STORM_WINDOW = 60;
+
     private ?Token $runtimeToken = null;
+
+    private array $recentRefreshes = [];
 
     public function __construct(
         private readonly Client $httpClient,
@@ -85,6 +91,65 @@ class TokenManager implements TokenManagerInterface
         return null;
     }
 
+    /**
+     * A token response is only usable if it says how long it lives. Without that check a missing
+     * `expires_in` casts to 0, every token is born expired, and the client refreshes on every single
+     * call until the throttled token endpoint starts answering 429 — all of it silent.
+     */
+    private function parseTokenResponse(array $data): Token
+    {
+        if (empty($data['access_token']) || !is_string($data['access_token'])) {
+            throw new AuthenticationException(sprintf(
+                'Notification service returned a token response without a usable "access_token". Received keys: [%s]',
+                implode(', ', array_keys($data)),
+            ));
+        }
+
+        if (!isset($data['expires_in']) || !is_numeric($data['expires_in'])) {
+            throw new AuthenticationException(sprintf(
+                'Notification service returned a token response without a numeric "expires_in". Received keys: [%s]',
+                implode(', ', array_keys($data)),
+            ));
+        }
+
+        $expiresIn = (int) $data['expires_in'];
+
+        if ($expiresIn <= $this->bufferSeconds) {
+            throw new AuthenticationException(sprintf(
+                'Token lifetime (%ds) is not greater than the configured buffer (%ds); lower '
+                . 'token.buffer_seconds or check the service configuration.',
+                $expiresIn,
+                $this->bufferSeconds,
+            ));
+        }
+
+        return Token::fromResponse($data, $this->bufferSeconds);
+    }
+
+    /** Turns a silent refresh storm into one visible error line. */
+    private function recordRefresh(): void
+    {
+        $now = time();
+        $window = $now - self::REFRESH_STORM_WINDOW;
+
+        $this->recentRefreshes = array_values(array_filter(
+            [...$this->recentRefreshes, $now],
+            fn(int $at): bool => $at > $window,
+        ));
+
+        if (count($this->recentRefreshes) < self::REFRESH_STORM_THRESHOLD) {
+            return;
+        }
+
+        $this->logger->error('[NotificationClient] Access token was fetched repeatedly in a short window — the cached token is not being reused.', [
+            'fetches' => count($this->recentRefreshes),
+            'within'  => self::REFRESH_STORM_WINDOW,
+            'check'   => 'token.cache_store must be shared across processes, and expires_in must exceed token.buffer_seconds',
+        ]);
+
+        $this->recentRefreshes = [];
+    }
+
     private function fetchToken(): Token
     {
         try {
@@ -98,15 +163,17 @@ class TokenManager implements TokenManagerInterface
 
             $data = json_decode($response->getBody()->getContents(), true);
 
-            if (empty($data['access_token'])) {
-                throw new AuthenticationException('Notification service returned an invalid token response.');
+            if (!is_array($data)) {
+                throw new AuthenticationException('Notification service returned a non-JSON token response.');
             }
 
-            $token = Token::fromResponse($data, $this->bufferSeconds);
+            $token = $this->parseTokenResponse($data);
 
-            $ttl = max(1, (int) $data['expires_in'] - $this->bufferSeconds);
-            $this->cache->put($this->cacheKey, $token, $ttl);
+            // Derived from the token itself, so the cache TTL can never disagree with isExpired().
+            $this->cache->put($this->cacheKey, $token, max(1, $token->expiresAt - time()));
             $this->runtimeToken = $token;
+
+            $this->recordRefresh();
 
             $this->logger->debug('[NotificationClient] Access token refreshed successfully.');
 

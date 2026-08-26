@@ -750,7 +750,7 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 | `client_secret`          | `NOTIFICATION_CLIENT_SECRET`       | *(none)*                             | OAuth client secret.                                        |
 | `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token. **Must be shared by every process** — see below. |
 | `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
-| `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires.   |
+| `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires. Must be shorter than the service's `expires_in`. |
 | `retry.attempts`         | —                                  | `3`                                  | Total attempts per retryable request (`1` = no retry).       |
 | `retry.sleep_ms`         | —                                  | `1000`                               | Milliseconds to wait between retries.                        |
 | `idempotency.enabled`    | `NOTIFICATION_IDEMPOTENCY`         | `false`                              | Service honours `Idempotency-Key`; makes sends retryable.    |
@@ -808,6 +808,20 @@ HTTPS URL, or — if this environment isn't really production — fix `APP_ENV`.
 **`AuthenticationException: Could not authenticate...`**
 Your `NOTIFICATION_CLIENT_ID` / `NOTIFICATION_CLIENT_SECRET` are wrong, or `NOTIFICATION_SERVICE_URL` is
 unreachable. Double-check `.env`, then `php artisan config:clear`.
+
+**`AuthenticationException: ... token response without a numeric "expires_in"`**
+The token endpoint answered without saying how long the token lives, so the client refuses it. Left unchecked, that
+missing field would cast to `0`, every token would count as expired the moment it was issued, and the client would
+re-login on every single call until the endpoint started returning `429`. The message lists the keys that did
+arrive — take it to whoever owns the service.
+
+**`AuthenticationException: Token lifetime (Ns) is not greater than the configured buffer (Ms)`**
+The service issues short-lived tokens and `token.buffer_seconds` eats the whole lifetime. Lower `buffer_seconds`
+below the real `expires_in`, or have the service issue longer-lived tokens.
+
+**Log line: `Access token was fetched repeatedly in a short window`**
+The cached token isn't being reused — three or more logins within a minute from one process. Check that
+`token.cache_store` is a store all processes share and that nothing is calling `invalidate()` in a loop.
 
 **`AuthenticationException: Timed out waiting for another process to refresh the access token.`**
 Another process held the token lock for more than 10 seconds and never published a token — usually the token

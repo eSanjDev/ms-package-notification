@@ -79,12 +79,13 @@ return [
 Token handling is **fully automatic**:
 
 1. On the first request the package fetches a token via the OAuth 2.0 client-credentials flow (`POST /api/v1/oauth/token`).
-2. The token is stored in your configured cache store with a TTL equal to `expires_in - buffer_seconds`.
-3. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
-4. Fetching happens behind a cache lock. When the cache is cold — a deploy, a Redis restart, an invalidation — one process fetches the token while the others wait and then read its result, instead of twenty workers hitting the throttled token endpoint at once.
-5. If a request receives an `HTTP 401`, the package invalidates the cached token, fetches a fresh one, and replays the request **once**. A second `401` means the credentials themselves are wrong, so it throws instead of hammering the token endpoint.
-6. An `HTTP 403` is left alone: the token is valid, the client simply has no permission for that endpoint. Refreshing would drop a healthy token for nothing — see `$e->isForbidden()`.
-7. If all retries fail, an `ApiException` (or `AuthenticationException`) is thrown and the error is logged.
+2. The response is validated before anything is cached — it must carry a usable `access_token` and a numeric `expires_in` longer than `buffer_seconds`. A response missing either is rejected with an `AuthenticationException` rather than cached as a token that is already expired.
+3. The token is stored in your configured cache store with a TTL equal to `expires_in - buffer_seconds`.
+4. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
+5. Fetching happens behind a cache lock. When the cache is cold — a deploy, a Redis restart, an invalidation — one process fetches the token while the others wait and then read its result, instead of twenty workers hitting the throttled token endpoint at once.
+6. If a request receives an `HTTP 401`, the package invalidates the cached token, fetches a fresh one, and replays the request **once**. A second `401` means the credentials themselves are wrong, so it throws instead of hammering the token endpoint.
+7. An `HTTP 403` is left alone: the token is valid, the client simply has no permission for that endpoint. Refreshing would drop a healthy token for nothing — see `$e->isForbidden()`.
+8. If all retries fail, an `ApiException` (or `AuthenticationException`) is thrown and the error is logged.
 
 ---
 

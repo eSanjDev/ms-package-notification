@@ -22,7 +22,9 @@ return [
     | Token Cache Settings
     |--------------------------------------------------------------------------
     | buffer_seconds: refresh the token this many seconds before it expires
-    |                 to avoid using a token right at its expiry edge.
+    |                 to avoid using a token right at its expiry edge. It must stay below the
+    |                 lifetime the service reports in `expires_in`, otherwise every token would be
+    |                 born expired; the client rejects such a response instead of looping.
     |
     | cache_store MUST be a store every web process and queue worker can see — redis or memcached.
     | The token endpoint allows 10 requests per minute per IP; one shared token turns that into about

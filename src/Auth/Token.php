@@ -2,6 +2,8 @@
 
 namespace Esanj\NotificationClient\Auth;
 
+use InvalidArgumentException;
+
 final class Token
 {
     public function __construct(
@@ -12,9 +14,15 @@ final class Token
 
     public static function fromResponse(array $response, int $bufferSeconds = 60): self
     {
+        if (!isset($response['access_token'], $response['expires_in'])) {
+            throw new InvalidArgumentException(
+                'Token response must contain both "access_token" and "expires_in".'
+            );
+        }
+
         return new self(
-            accessToken: $response['access_token'],
-            tokenType: $response['token_type'] ?? 'Bearer',
+            accessToken: (string) $response['access_token'],
+            tokenType: (string) ($response['token_type'] ?? 'Bearer'),
             expiresAt: time() + (int) $response['expires_in'] - $bufferSeconds,
         );
     }
