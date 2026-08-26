@@ -91,6 +91,7 @@ client therefore retries by method:
 |---------------------------------------------|------------------------------------------------------|
 | `GET` on a `5xx` or connection error        | Yes, up to `retry.attempts`.                          |
 | `401` on any method                         | Once — the token is refreshed and the call replayed immediately (a rejected token proves the request was never processed). A second `401` throws. |
+| `429` on any method                         | Yes — waits for the server's `Retry-After` (capped at 30s) and replays. The throttle rejects before any processing happens, so this is safe for sends too. |
 | `send` / `sendBatch` on a `5xx` or timeout  | Only when `idempotency.enabled` is `true`.            |
 | `403`, and every other `4xx`                | Never — an `ApiException` is thrown at once.          |
 
@@ -362,9 +363,14 @@ All exceptions extend `Esanj\NotificationClient\Exceptions\NotificationClientExc
 use Esanj\NotificationClient\Exceptions\ApiException;
 use Esanj\NotificationClient\Exceptions\AuthenticationException;
 use Esanj\NotificationClient\Exceptions\NotificationClientException;
+use Esanj\NotificationClient\Exceptions\RateLimitException;
 
 try {
     $notification = $notifier->send($data);
+} catch (RateLimitException $e) {
+    // The OAuth token endpoint is throttled (10/min per IP) — the credentials are fine
+    $this->release($e->retryAfter ?? 60);
+
 } catch (AuthenticationException $e) {
     // OAuth credentials are invalid or the service is unreachable
     Log::critical('Notification auth failed', ['error' => $e->getMessage()]);
@@ -373,6 +379,10 @@ try {
     if ($e->isValidationError()) {
         // $data was invalid — inspect field errors
         $errors = $e->getErrors(); // ['recipient' => ['The recipient format is invalid.']]
+    }
+    if ($e->isRateLimited()) {
+        // Still throttled after backing off — come back later instead of hammering
+        $this->release($e->retryAfter ?? 60);
     }
     Log::error('Notification API error', [
         'status'   => $e->statusCode,
@@ -386,9 +396,13 @@ try {
 
 | Exception | When thrown |
 |-----------|-------------|
-| `AuthenticationException` | Cannot fetch/refresh OAuth token |
-| `ApiException` | Non-retriable HTTP error (4xx, persistent 5xx) |
+| `AuthenticationException` | Cannot fetch/refresh OAuth token (bad credentials, service unreachable) |
+| `RateLimitException` | The token endpoint returned `429`. Credentials are valid — you're just asking for tokens too often |
+| `ApiException` | Non-retriable HTTP error (4xx, persistent 5xx, or a `429` that survived the back-off) |
 | `NotificationClientException` | Base class — all exceptions above extend this |
+
+`RateLimitException` and `ApiException::isRateLimited()` both carry `$e->retryAfter` — the server's `Retry-After`
+in seconds, or `null` when it didn't send one. It's exactly what `$job->release()` wants.
 
 ---
 

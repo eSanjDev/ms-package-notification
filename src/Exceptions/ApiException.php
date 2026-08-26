@@ -11,6 +11,7 @@ class ApiException extends NotificationClientException
         public readonly int $statusCode,
         public readonly array $responseBody,
         ?Throwable $previous = null,
+        public readonly ?int $retryAfter = null,
     ) {
         parent::__construct($message, $statusCode, $previous);
     }
@@ -33,5 +34,10 @@ class ApiException extends NotificationClientException
     public function isValidationError(): bool
     {
         return $this->statusCode === 422;
+    }
+
+    public function isRateLimited(): bool
+    {
+        return $this->statusCode === 429;
     }
 }

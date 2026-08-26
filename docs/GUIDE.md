@@ -444,9 +444,14 @@ Every exception this package throws extends `NotificationClientException`, so yo
 use Esanj\NotificationClient\Exceptions\ApiException;
 use Esanj\NotificationClient\Exceptions\AuthenticationException;
 use Esanj\NotificationClient\Exceptions\NotificationClientException;
+use Esanj\NotificationClient\Exceptions\RateLimitException;
 
 try {
     $notification = $notifier->send($data);
+
+} catch (RateLimitException $e) {
+    // The token endpoint is throttled — your credentials are fine, you're just fetching tokens too often
+    $this->release($e->retryAfter ?? 60);
 
 } catch (AuthenticationException $e) {
     // Could not log in / refresh the token (bad client id/secret, or service unreachable)
@@ -456,9 +461,13 @@ try {
     if ($e->isValidationError()) {          // HTTP 422
         $errors = $e->getErrors();          // e.g. ['recipient' => ['The recipient format is invalid.']]
     }
+    if ($e->isRateLimited()) {              // HTTP 429, still throttled after backing off
+        $this->release($e->retryAfter ?? 60);
+    }
     // Always available on ApiException:
     $e->statusCode;     // int  — e.g. 422, 404, 500, or 0 for connection errors
     $e->responseBody;   // array — the decoded JSON error body
+    $e->retryAfter;     // ?int — seconds from the `Retry-After` header, on a 429
     $e->isUnauthorized();   // 401 — the token was rejected
     $e->isForbidden();      // 403 — the token is fine, this client lacks the service permission
     report($e);
@@ -472,8 +481,19 @@ try {
 | Exception                     | When it's thrown                                                       |
 |-------------------------------|------------------------------------------------------------------------|
 | `AuthenticationException`     | The token could not be fetched or refreshed.                           |
-| `ApiException`                | The API returned an error (validation 4xx, or a 5xx after all retries, or a connection failure). |
-| `NotificationClientException` | Base class — both of the above extend it.                              |
+| `RateLimitException`          | The token endpoint answered `429`. Not a credentials problem — see the note below. |
+| `ApiException`                | The API returned an error (validation 4xx, a `429` that outlived the back-off, a 5xx after all retries, or a connection failure). |
+| `NotificationClientException` | Base class — all of the above extend it.                               |
+
+> ⏳ **`429` is handled for you, once.** On a rate-limited response the client waits for the server's `Retry-After`
+> (capped at 30 seconds so a web request can't hang) and replays the call — for sends too, since the throttle
+> middleware rejects the request before anything is created. If it's *still* throttled when attempts run out, you get
+> an `ApiException` with `isRateLimited()` true and `$e->retryAfter` set.
+
+> 🔑 **`RateLimitException` on the token endpoint means one thing: too many token fetches.** That endpoint allows
+> 10 requests per minute per IP. If you hit it, your processes are not sharing the cached token — check that every
+> web process and queue worker points `token.cache_store` at the same shared store (Redis, Memcached), not `array`
+> or a per-container `file` cache.
 
 > 🔁 **Reads retry themselves.** `GET` calls are retried `retry.attempts` times on `5xx` and connection errors. A
 > `401` on any method refreshes the token and replays the call once. An exception is thrown once retries are
@@ -746,6 +766,11 @@ production).
 **`ApiException` with `isValidationError()` true (HTTP 422).**
 The service rejected your data. Inspect `$e->getErrors()` — it returns a field-by-field error map and usually tells
 you exactly what's wrong (bad recipient format, missing channel, unknown tag, etc.).
+
+**`RateLimitException: Token endpoint rate limit reached...`**
+Every process is fetching its own access token instead of reading the shared one. Point
+`token.cache_store` at a store all of them can see (Redis/Memcached) and confirm they use the same `cache_key`. The
+limit is 10 token requests per minute per IP; one shared token means roughly one request per hour.
 
 **`ApiException` with `isForbidden()` true (HTTP 403).**
 Your credentials are fine — this client has no permission for that endpoint on the service. Nothing on the client

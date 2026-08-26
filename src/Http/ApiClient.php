@@ -9,11 +9,16 @@ use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\ServerException;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 
 class ApiClient
 {
     private const TOKEN_INVALID_STATUS = 401;
+
+    private const RATE_LIMITED_STATUS = 429;
+
+    private const MAX_RETRY_AFTER_SECONDS = 30;
 
     private const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
@@ -55,6 +60,7 @@ class ApiClient
         $maxAttempts = max($this->retryAttempts, 1);
         $attemptsLeft = $canRetry ? $maxAttempts : 1;
         $tokenRefreshed = false;
+        $rateLimitRetriesLeft = $maxAttempts - 1;
         $attempt = 0;
 
         while ($attemptsLeft > 0) {
@@ -83,12 +89,38 @@ class ApiClient
                 $status = $e->getResponse()->getStatusCode();
                 $body = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
 
+                $retryAfter = $status === self::RATE_LIMITED_STATUS
+                    ? $this->retryAfterSeconds($e->getResponse())
+                    : null;
+
                 $apiException = new ApiException(
-                    message: $body['message'] ?? "HTTP {$status} error.",
+                    message: $body['message'] ?? ($status === self::RATE_LIMITED_STATUS
+                        ? 'Rate limited by the notification service.'
+                        : "HTTP {$status} error."),
                     statusCode: $status,
                     responseBody: $body,
                     previous: $e,
+                    retryAfter: $retryAfter,
                 );
+
+                if ($status === self::RATE_LIMITED_STATUS && $rateLimitRetriesLeft > 0) {
+                    $rateLimitRetriesLeft--;
+                    $attemptsLeft = max($attemptsLeft, 1);
+
+                    $waitSeconds = min($retryAfter, self::MAX_RETRY_AFTER_SECONDS);
+
+                    $this->logger->warning('[NotificationClient] Rate limited, backing off.', [
+                        'retry_after' => $retryAfter,
+                        'waiting'     => $waitSeconds,
+                        'attempt'     => $attempt,
+                        'url'         => $url,
+                    ]);
+
+                    usleep($waitSeconds * 1_000_000);
+
+                    $lastException = $apiException;
+                    continue;
+                }
 
                 if ($status === self::TOKEN_INVALID_STATUS && !$tokenRefreshed) {
                     $tokenRefreshed = true;
@@ -106,7 +138,13 @@ class ApiClient
                     continue;   // no sleep — this is not a network error
                 }
 
-                if ($status === 403) {
+                if ($status === self::RATE_LIMITED_STATUS) {
+                    $this->logger->error('[NotificationClient] Still rate limited after backing off.', [
+                        'retry_after' => $retryAfter,
+                        'attempts'    => $attempt,
+                        'url'         => $url,
+                    ]);
+                } elseif ($status === 403) {
                     $this->logger->error('[NotificationClient] Forbidden — this client lacks the service permission for this endpoint. Refreshing the token will not help.', [
                         'url' => $url,
                         'response' => $body,
@@ -197,6 +235,23 @@ class ApiClient
         ]);
 
         throw $lastException ?? new ApiException('Request failed after all retry attempts.', 0, []);
+    }
+
+    private function retryAfterSeconds(ResponseInterface $response): int
+    {
+        $header = trim($response->getHeaderLine('Retry-After'));
+
+        if ($header === '') {
+            return 1;
+        }
+
+        if (is_numeric($header)) {
+            return max(1, (int) $header);
+        }
+
+        $timestamp = strtotime($header);
+
+        return $timestamp === false ? 1 : max(1, $timestamp - time());
     }
 
     private function sleep(): void

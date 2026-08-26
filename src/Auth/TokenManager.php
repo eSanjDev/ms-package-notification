@@ -4,7 +4,9 @@ namespace Esanj\NotificationClient\Auth;
 
 use Esanj\NotificationClient\Contracts\TokenManagerInterface;
 use Esanj\NotificationClient\Exceptions\AuthenticationException;
+use Esanj\NotificationClient\Exceptions\RateLimitException;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Psr\Log\LoggerInterface;
@@ -68,6 +70,31 @@ class TokenManager implements TokenManagerInterface
             return $token;
         } catch (AuthenticationException $e) {
             throw $e;
+        } catch (ClientException $e) {
+            if ($e->getResponse()->getStatusCode() === 429) {
+                $retryAfter = (int) ($e->getResponse()->getHeaderLine('Retry-After') ?: 0) ?: null;
+
+                $this->logger->warning('[NotificationClient] Token endpoint rate limit reached.', [
+                    'retry_after' => $retryAfter,
+                ]);
+
+                throw new RateLimitException(
+                    'Token endpoint rate limit reached. Make sure every worker and web process shares one '
+                    . 'cache store for the access token, so the token is fetched once instead of per process.',
+                    retryAfter: $retryAfter,
+                    previous: $e,
+                );
+            }
+
+            $this->logger->error('[NotificationClient] Failed to fetch access token.', [
+                'status' => $e->getResponse()->getStatusCode(),
+                'error'  => $e->getMessage(),
+            ]);
+
+            throw new AuthenticationException(
+                'Could not authenticate with the notification service: ' . $e->getMessage(),
+                previous: $e,
+            );
         } catch (GuzzleException $e) {
             $this->logger->error('[NotificationClient] Failed to fetch access token.', [
                 'error' => $e->getMessage(),
