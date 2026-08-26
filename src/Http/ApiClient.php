@@ -21,6 +21,10 @@ class ApiClient
 
     private const MAX_RETRY_AFTER_SECONDS = 30;
 
+    private const MAX_BACKOFF_MS = 10_000;
+
+    private const RATE_LIMIT_JITTER_MS = 1_000;
+
     private const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
     public function __construct(
@@ -108,16 +112,19 @@ class ApiClient
                     $rateLimitRetriesLeft--;
                     $attemptsLeft = max($attemptsLeft, 1);
 
-                    $waitSeconds = min($retryAfter, self::MAX_RETRY_AFTER_SECONDS);
+                    // Retry-After is the floor; the jitter on top keeps every throttled client from
+                    // resuming on the same tick.
+                    $waitMs = min($retryAfter, self::MAX_RETRY_AFTER_SECONDS) * 1_000
+                        + random_int(0, self::RATE_LIMIT_JITTER_MS);
 
                     $this->logger->warning('[NotificationClient] Rate limited, backing off.', [
                         'retry_after' => $retryAfter,
-                        'waiting'     => $waitSeconds,
+                        'wait_ms'     => $waitMs,
                         'attempt'     => $attempt,
                         'url'         => $url,
                     ]);
 
-                    usleep($waitSeconds * 1_000_000);
+                    $this->sleep($waitMs);
 
                     $lastException = $apiException;
                     continue;
@@ -180,13 +187,16 @@ class ApiClient
                     break;
                 }
 
+                $waitMs = $this->backoffMs($attempt);
+
                 $this->logger->warning('[NotificationClient] Server error, retrying.', [
-                    'status' => $status,
+                    'status'  => $status,
                     'attempt' => $attempt,
-                    'url' => $url,
+                    'wait_ms' => $waitMs,
+                    'url'     => $url,
                 ]);
 
-                $this->sleep();
+                $this->sleep($waitMs);
 
             } catch (ConnectException $e) {
                 $lastException = new ApiException(
@@ -206,13 +216,16 @@ class ApiClient
                     break;
                 }
 
+                $waitMs = $this->backoffMs($attempt);
+
                 $this->logger->warning('[NotificationClient] Connection error, retrying.', [
                     'attempt' => $attempt,
-                    'url' => $url,
-                    'error' => $e->getMessage(),
+                    'wait_ms' => $waitMs,
+                    'url'     => $url,
+                    'error'   => $e->getMessage(),
                 ]);
 
-                $this->sleep();
+                $this->sleep($waitMs);
 
             } catch (GuzzleException $e) {
                 $this->logger->error('[NotificationClient] Unexpected HTTP error.', [
@@ -283,10 +296,27 @@ class ApiClient
         return $timestamp === false ? 1 : max(1, $timestamp - time());
     }
 
-    private function sleep(): void
+    /**
+     * Exponential backoff with jitter. A fixed delay makes every client that failed at the same
+     * moment retry at the same moment, hitting a recovering service with the same wave twice over.
+     * Half the delay is fixed so attempts still spread out over time, half is random so the clients
+     * spread out from each other.
+     */
+    private function backoffMs(int $attempt): int
     {
-        if ($this->retrySleepMs > 0) {
-            usleep($this->retrySleepMs * 1_000);
+        if ($this->retrySleepMs <= 0) {
+            return 0;
+        }
+
+        $backoffMs = (int) min($this->retrySleepMs * (2 ** ($attempt - 1)), self::MAX_BACKOFF_MS);
+
+        return random_int((int) ($backoffMs * 0.5), $backoffMs);
+    }
+
+    private function sleep(int $milliseconds): void
+    {
+        if ($milliseconds > 0) {
+            usleep($milliseconds * 1_000);
         }
     }
 }

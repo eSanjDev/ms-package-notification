@@ -57,7 +57,7 @@ return [
 
     'retry' => [
         'attempts' => 3,      // total attempts including the first
-        'sleep_ms' => 1000,   // milliseconds between retries
+        'sleep_ms' => 1000,   // base delay; doubles per attempt, half of it randomised
     ],
 
     'idempotency' => [
@@ -102,6 +102,10 @@ client therefore retries by method:
 | `429` on any method                         | Yes — waits for the server's `Retry-After` (capped at 30s) and replays. The throttle rejects before any processing happens, so this is safe for sends too. |
 | `send` / `sendBatch` on a `5xx` or timeout  | Only when `idempotency.enabled` is `true`.            |
 | `403`, and every other `4xx`                | Never — an `ApiException` is thrown at once.          |
+
+Waits grow exponentially and carry jitter: `retry.sleep_ms` doubles per attempt (1s, 2s, 4s… capped at 10s) with
+half of each delay randomised, so clients that fail at the same moment don't all retry at the same moment. A `429`
+keeps the server's `Retry-After` as the floor and adds up to a second of spread on top.
 
 With `idempotency.enabled = false` (the default) a failed send throws after a single attempt. Handle it yourself —
 usually by letting the queued job retry with a key of your own, see below.

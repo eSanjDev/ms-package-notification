@@ -752,7 +752,7 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 | `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
 | `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires. Must be shorter than the service's `expires_in`. |
 | `retry.attempts`         | —                                  | `3`                                  | Total attempts per retryable request (`1` = no retry).       |
-| `retry.sleep_ms`         | —                                  | `1000`                               | Milliseconds to wait between retries.                        |
+| `retry.sleep_ms`         | —                                  | `1000`                               | Base delay between retries: doubles per attempt (capped at 10s), half of each delay randomised. `0` disables waiting. |
 | `idempotency.enabled`    | `NOTIFICATION_IDEMPOTENCY`         | `false`                              | Service honours `Idempotency-Key`; makes sends retryable.    |
 | `timeout`                | —                                  | `30`                                 | HTTP request timeout, in seconds.                            |
 | `logging.channel`        | `NOTIFICATION_LOG_CHANNEL`         | `null` → app default channel         | Log channel for the package's warnings/errors.               |
@@ -871,8 +871,11 @@ Payload builders are immutable — each method returns a new object. Always keep
 the tip in [section 7](#7-sending-each-channel).
 
 **Requests are slow when the service is down.**
-That's the retry policy working. Lower `retry.attempts` and/or `retry.sleep_ms` in the config if you prefer to fail
-faster, or raise `timeout` if the service is just slow.
+That's the retry policy working, and the waits grow on purpose: `sleep_ms` doubles per attempt (1s, 2s, 4s… capped
+at 10s) and half of each delay is randomised, so a fleet that failed together doesn't retry in lockstep and knock
+the service over again as it recovers. The `wait_ms` field in the retry log lines tells you exactly how long each
+pause was. Lower `retry.attempts` and/or `retry.sleep_ms` if you prefer to fail faster, or raise `timeout` if the
+service is just slow.
 
 ---
 

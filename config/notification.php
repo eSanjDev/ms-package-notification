@@ -42,7 +42,9 @@ return [
     | Retry Policy
     |--------------------------------------------------------------------------
     | attempts  : total number of attempts (1 = no retry)
-    | sleep_ms  : milliseconds to wait between retries
+    | sleep_ms  : base delay between retries. It doubles per attempt (1s, 2s, 4s, capped at 10s) and
+    |             half of each delay is randomised, so clients that failed together do not all retry
+    |             on the same tick and hammer a recovering service. 0 disables waiting entirely.
     |
     | Only GET/HEAD/OPTIONS are retried on server or connection errors. A send is retried solely when
     | idempotency is enabled below, because a lost response does not mean the service ignored the call.
