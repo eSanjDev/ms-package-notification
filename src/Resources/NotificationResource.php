@@ -3,9 +3,12 @@
 namespace Esanj\NotificationClient\Resources;
 
 use Carbon\CarbonImmutable;
+use Esanj\NotificationClient\Resources\Concerns\HydratesSafely;
 
 final class NotificationResource
 {
+    use HydratesSafely;
+
     public function __construct(
         public readonly string $uuid,
         public readonly string $status,
@@ -14,7 +17,7 @@ final class NotificationResource
         public readonly ?string $batchUuid,
         public readonly ?CarbonImmutable $sentAt,
         public readonly CarbonImmutable $createdAt,
-        public readonly CarbonImmutable $updatedAt,
+        public readonly ?CarbonImmutable $updatedAt,
     ) {}
 
     public static function fromArray(array $response): self
@@ -22,14 +25,14 @@ final class NotificationResource
         $item = $response['data'] ?? $response;
 
         return new self(
-            uuid:      $item['uuid'],
-            status:    $item['status'],
-            channel:   $item['channel'],
-            recipient: $item['recipient'],
-            batchUuid: $item['batch_uuid'] ?? null,
-            sentAt:    isset($item['sent_at']) ? CarbonImmutable::parse($item['sent_at']) : null,
-            createdAt: CarbonImmutable::parse($item['created_at']),
-            updatedAt: CarbonImmutable::parse($item['updated_at']),
+            uuid:      self::requiredString($item, 'uuid'),
+            status:    self::requiredString($item, 'status'),
+            channel:   self::requiredString($item, 'channel'),
+            recipient: self::requiredString($item, 'recipient'),
+            batchUuid: self::optionalString($item, 'batch_uuid'),
+            sentAt:    self::optionalDate($item, 'sent_at'),
+            createdAt: self::requiredDate($item, 'created_at'),
+            updatedAt: self::optionalDate($item, 'updated_at'),
         );
     }
 

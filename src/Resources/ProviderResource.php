@@ -3,13 +3,16 @@
 namespace Esanj\NotificationClient\Resources;
 
 use Carbon\CarbonImmutable;
+use Esanj\NotificationClient\Resources\Concerns\HydratesSafely;
 
 final class ProviderResource
 {
+    use HydratesSafely;
+
     public function __construct(
         public readonly int $id,
-        public readonly string $providerName,
-        public readonly string $providerChannel,
+        public readonly ?string $providerName,
+        public readonly ?string $providerChannel,
         public readonly int $providerId,
         public readonly int $orderColumn,
         public readonly CarbonImmutable $createdAt,
@@ -18,12 +21,12 @@ final class ProviderResource
     public static function fromArray(array $item): self
     {
         return new self(
-            id:              (int) $item['id'],
-            providerName:    $item['provider_name'],
-            providerChannel: $item['provider_channel'],
-            providerId:      (int) $item['provider_id'],
+            id:              self::requiredInt($item, 'id'),
+            providerName:    self::optionalString($item, 'provider_name'),
+            providerChannel: self::optionalString($item, 'provider_channel'),
+            providerId:      self::requiredInt($item, 'provider_id'),
             orderColumn:     (int) ($item['order_column'] ?? 0),
-            createdAt:       CarbonImmutable::parse($item['created_at']),
+            createdAt:       self::requiredDate($item, 'created_at'),
         );
     }
 }

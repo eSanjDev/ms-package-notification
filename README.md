@@ -404,7 +404,12 @@ try {
 | `AuthenticationException` | Cannot fetch/refresh OAuth token (bad credentials, service unreachable) |
 | `RateLimitException` | The token endpoint returned `429`. Credentials are valid — you're just asking for tokens too often |
 | `ApiException` | Non-retriable HTTP error (4xx, persistent 5xx, or a `429` that survived the back-off) |
+| `UnexpectedResponseException` | HTTP 200, but the payload is missing a field the contract guarantees. The message names the field and lists the keys that did arrive |
 | `NotificationClientException` | Base class — all exceptions above extend this |
+
+Fields the service may legitimately leave empty are typed nullable rather than blowing up: `providerName` and
+`providerChannel` (null when the underlying provider record is gone), and `updatedAt` on notifications, batches and
+tags (null instead of being parsed into a fake "now").
 
 `RateLimitException` and `ApiException::isRateLimited()` both carry `$e->retryAfter` — the server's `Retry-After`
 in seconds, or `null` when it didn't send one. It's exactly what `$job->release()` wants.
@@ -498,7 +503,7 @@ $notifier = new NotificationClient($apiClient);
 | `batchUuid` | `string\|null` | Parent batch UUID if sent as part of a batch |
 | `sentAt` | `CarbonImmutable\|null` | When the message was sent |
 | `createdAt` | `CarbonImmutable` | |
-| `updatedAt` | `CarbonImmutable` | |
+| `updatedAt` | `CarbonImmutable\|null` | Null when the service didn't send one |
 
 ### `BatchResource`
 | Property | Type | Description |
@@ -507,7 +512,30 @@ $notifier = new NotificationClient($apiClient);
 | `status` | `string` | `pending` \| `processing` \| `canceled` \| `completed` |
 | `totalNotifications` | `int` | Number of notifications in the batch |
 | `processedNotifications` | `int` | Notifications processed so far |
+| `createdAt` | `CarbonImmutable` | |
+| `updatedAt` | `CarbonImmutable\|null` | Null when the service didn't send one |
 | `progressPercentage()` | `float` | Computed progress 0–100 |
+
+### `ProviderResource`
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `int` | Client-provider row id |
+| `providerName` | `string\|null` | Null if the provider record no longer exists |
+| `providerChannel` | `string\|null` | Null for the same reason |
+| `providerId` | `int` | The provider this row points at |
+| `orderColumn` | `int` | Selection order |
+| `createdAt` | `CarbonImmutable` | |
+
+### `TagResource`
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `int` | |
+| `name` | `string` | |
+| `description` | `string\|null` | |
+| `color` | `string\|null` | |
+| `usedCount` | `int` | How many notifications carry the tag |
+| `createdAt` | `CarbonImmutable` | |
+| `updatedAt` | `CarbonImmutable\|null` | Null when the service didn't send one |
 
 ---
 

@@ -3,16 +3,19 @@
 namespace Esanj\NotificationClient\Resources;
 
 use Carbon\CarbonImmutable;
+use Esanj\NotificationClient\Resources\Concerns\HydratesSafely;
 
 final class BatchResource
 {
+    use HydratesSafely;
+
     public function __construct(
         public readonly string $uuid,
         public readonly string $status,
         public readonly int $totalNotifications,
         public readonly int $processedNotifications,
         public readonly CarbonImmutable $createdAt,
-        public readonly CarbonImmutable $updatedAt,
+        public readonly ?CarbonImmutable $updatedAt,
     ) {}
 
     public static function fromArray(array $response): self
@@ -20,12 +23,12 @@ final class BatchResource
         $item = $response['data'] ?? $response;
 
         return new self(
-            uuid:                   $item['uuid'],
-            status:                 $item['status'],
+            uuid:                   self::requiredString($item, 'uuid'),
+            status:                 self::requiredString($item, 'status'),
             totalNotifications:     (int) ($item['total_notifications'] ?? 0),
             processedNotifications: (int) ($item['processed_notifications'] ?? 0),
-            createdAt:              CarbonImmutable::parse($item['created_at']),
-            updatedAt:              CarbonImmutable::parse($item['updated_at']),
+            createdAt:              self::requiredDate($item, 'created_at'),
+            updatedAt:              self::optionalDate($item, 'updated_at'),
         );
     }
 

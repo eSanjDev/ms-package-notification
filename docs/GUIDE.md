@@ -454,6 +454,7 @@ use Esanj\NotificationClient\Exceptions\ApiException;
 use Esanj\NotificationClient\Exceptions\AuthenticationException;
 use Esanj\NotificationClient\Exceptions\NotificationClientException;
 use Esanj\NotificationClient\Exceptions\RateLimitException;
+use Esanj\NotificationClient\Exceptions\UnexpectedResponseException;
 
 try {
     $notification = $notifier->send($data);
@@ -481,6 +482,11 @@ try {
     $e->isForbidden();      // 403 — the token is fine, this client lacks the service permission
     report($e);
 
+} catch (UnexpectedResponseException $e) {
+    // The service answered 200 with a payload that doesn't match the contract — a service-side bug,
+    // not something your input can fix. The message names the offending field.
+    report($e);
+
 } catch (NotificationClientException $e) {
     // Catch-all safety net for anything else from the package
     report($e);
@@ -492,7 +498,16 @@ try {
 | `AuthenticationException`     | The token could not be fetched or refreshed.                           |
 | `RateLimitException`          | The token endpoint answered `429`. Not a credentials problem — see the note below. |
 | `ApiException`                | The API returned an error (validation 4xx, a `429` that outlived the back-off, a 5xx after all retries, or a connection failure). |
+| `UnexpectedResponseException` | The call succeeded but the payload is missing a guaranteed field.      |
 | `NotificationClientException` | Base class — all of the above extend it.                               |
+
+> 🧩 **Resources fail loudly, or not at all.** A field the API contract guarantees (`uuid`, `id`, `created_at`, …)
+> that arrives missing or null raises an `UnexpectedResponseException` naming the field and listing the keys that did
+> arrive — instead of a `TypeError` from deep inside the package. Fields the service may legitimately leave empty are
+> typed nullable: `ProviderResource::$providerName` and `$providerChannel` (null when the provider record was deleted
+> but the client-provider row survived), and `$updatedAt` on notifications, batches and tags. That last one used to
+> be parsed from `null` into the current time — a wrong timestamp with no warning; it is `?CarbonImmutable` now, so
+> check it before formatting.
 
 > ⏳ **`429` is handled for you, once.** On a rate-limited response the client waits for the server's `Retry-After`
 > (capped at 30 seconds so a web request can't hang) and replays the call — for sends too, since the throttle
@@ -802,6 +817,16 @@ Your credentials are fine — this client has no permission for that endpoint on
 side fixes it: grant the permission to your `client_id` in the service's `config/esanj/app_service.php`
 (`tags_list`, `send_single_notification`, `providers_list`, …). The client fails fast here on purpose and does not
 refresh the token.
+
+**`UnexpectedResponseException: ... missing required field "provider_name"` (or any other field).**
+The service returned a payload the client cannot trust. The message lists the keys that did arrive — compare them
+with what the endpoint documents. Common cause: a related record was deleted while the row pointing at it survived.
+Report it against the service; nothing in your calling code can work around it.
+
+**A `updatedAt` you used to format is suddenly null.**
+It always could be — the client used to turn a null timestamp into the current time, which quietly produced wrong
+data. `NotificationResource`, `BatchResource` and `TagResource` now expose `?CarbonImmutable`, so use
+`$n->updatedAt?->diffForHumans()` or fall back to `$n->createdAt`.
 
 **My SMS/email never arrives, but `send()` succeeded.**
 `send()` returning `status: 'pending'` only means the service **accepted** it for delivery. Check the real outcome

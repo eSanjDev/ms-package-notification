@@ -2,6 +2,8 @@
 
 namespace Esanj\NotificationClient\Resources;
 
+use Esanj\NotificationClient\Exceptions\UnexpectedResponseException;
+
 final class PaginatedResult implements \IteratorAggregate, \Countable
 {
     /**
@@ -28,10 +30,17 @@ final class PaginatedResult implements \IteratorAggregate, \Countable
      */
     public static function fromArray(array $response, callable $itemMapper): self
     {
+        if (!is_array($response['data'] ?? null)) {
+            throw new UnexpectedResponseException(sprintf(
+                'Notification service returned no "data" list. Received keys: [%s]',
+                implode(', ', array_keys($response)),
+            ));
+        }
+
         $meta = $response['meta'] ?? [];
 
         return new self(
-            items:       array_map($itemMapper, $response['data'] ?? []),
+            items:       array_map($itemMapper, $response['data']),
             total:       (int) ($meta['total'] ?? 0),
             perPage:     (int) ($meta['per_page'] ?? 15),
             currentPage: (int) ($meta['current_page'] ?? 1),
