@@ -421,11 +421,15 @@ echo $batch->isCompleted() ? 'Done' : 'In progress';
 ## 11. Providers & tags
 
 ```php
-// Providers — returns a plain array of ProviderResource (not paginated)
+// Providers — a plain array of ProviderResource holding *every* provider
 foreach ($notifier->listProviders() as $provider) {
     echo "{$provider->providerName} ({$provider->providerChannel})" . PHP_EOL;
 }
 $one = $notifier->getProvider(3);
+
+// Need the pagination metadata, or just one page? Ask for a page instead.
+$page = $notifier->listProvidersPage(perPage: 25, page: 2);   // PaginatedResult
+echo "{$page->total} providers in total";
 
 // Tags — returns a PaginatedResult of TagResource
 $tags = $notifier->listTags(perPage: 50);
@@ -434,6 +438,10 @@ foreach ($tags->items as $tag) {
 }
 $tag = $notifier->getTag(7);
 ```
+
+> ℹ️ The providers endpoint **is** paginated server-side (`per_page` defaults to 15, capped at 100).
+> `listProviders()` walks the pages for you and returns the complete list, so it costs one request per 100
+> providers — normally one. Use `listProvidersPage()` when you want the metadata or control over paging.
 
 ---
 
@@ -757,7 +765,8 @@ For reference, here's exactly which microservice endpoints each method calls:
 | `eachNotification`       | `GET`  | `/api/v1/notifications` (one call per page) |
 | `getBatch`               | `GET`  | `/api/v1/notification-batches/{uuid}`     |
 | `listBatches`            | `GET`  | `/api/v1/notification-batches`            |
-| `listProviders`          | `GET`  | `/api/v1/client-providers`                |
+| `listProviders`          | `GET`  | `/api/v1/client-providers` (one call per page) |
+| `listProvidersPage`      | `GET`  | `/api/v1/client-providers`                |
 | `getProvider`            | `GET`  | `/api/v1/client-providers/{id}`           |
 | `listTags`               | `GET`  | `/api/v1/tags`                            |
 | `getTag`                 | `GET`  | `/api/v1/tags/{id}`                       |
@@ -832,7 +841,8 @@ $notifier->listNotifications(new NotificationFilter(status: 'sent', page: 2));
 foreach ($notifier->eachNotification() as $n) { /* every page, lazily */ }
 
 // Meta
-$notifier->listProviders();
+$notifier->listProviders();                             // all of them
+$notifier->listProvidersPage(perPage: 25, page: 2);     // one page + metadata
 $notifier->listTags(perPage: 50, page: 1);
 ```
 

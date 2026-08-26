@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static BatchResource getBatch(string $uuid)
  * @method static PaginatedResult listBatches(int $perPage = 15, int $page = 1)
  * @method static ProviderResource[] listProviders()
+ * @method static PaginatedResult listProvidersPage(int $perPage = 100, int $page = 1)
  * @method static ProviderResource getProvider(int $id)
  * @method static PaginatedResult listTags(int $perPage = 15, int $page = 1)
  * @method static TagResource getTag(int $id)

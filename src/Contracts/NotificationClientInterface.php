@@ -30,6 +30,8 @@ interface NotificationClientInterface
 
     public function listProviders(): array;
 
+    public function listProvidersPage(int $perPage = 100, int $page = 1): PaginatedResult;
+
     public function getProvider(int $id): ProviderResource;
 
     public function listTags(int $perPage = 15, int $page = 1): PaginatedResult;

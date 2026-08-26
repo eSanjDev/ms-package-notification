@@ -16,6 +16,8 @@ use Generator;
 
 class NotificationClient implements NotificationClientInterface
 {
+    private const MAX_PER_PAGE = 100;
+
     public function __construct(private readonly ApiClient $apiClient) {}
 
     public function send(SendNotificationData $data): NotificationResource
@@ -78,8 +80,29 @@ class NotificationClient implements NotificationClientInterface
 
     public function listProviders(): array
     {
-        $response = $this->apiClient->get('api/v1/client-providers');
-        return array_map(ProviderResource::fromArray(...), $response['data'] ?? []);
+        $providers = [];
+        $page = 1;
+
+        while (true) {
+            $result = $this->listProvidersPage(page: $page);
+            $providers = array_merge($providers, $result->items);
+
+            if (!$result->hasMorePages() || $result->currentPage !== $page) {
+                return $providers;
+            }
+
+            $page++;
+        }
+    }
+
+    public function listProvidersPage(int $perPage = self::MAX_PER_PAGE, int $page = 1): PaginatedResult
+    {
+        $response = $this->apiClient->get('api/v1/client-providers', [
+            'per_page' => min(max($perPage, 1), self::MAX_PER_PAGE),
+            'page'     => $page,
+        ]);
+
+        return PaginatedResult::fromArray($response, ProviderResource::fromArray(...));
     }
 
     public function getProvider(int $id): ProviderResource

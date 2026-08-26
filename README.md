@@ -341,11 +341,15 @@ echo $batch->isCompleted() ? 'Done' : 'In progress';
 ## Providers & Tags
 
 ```php
-// List your configured providers
+// Every configured provider — the endpoint is paginated, and this walks all of it
 $providers = $notifier->listProviders();
 foreach ($providers as $provider) {
     echo "{$provider->providerName} ({$provider->providerChannel})" . PHP_EOL;
 }
+
+// One page, with the pagination metadata (per_page is capped at 100 by the service)
+$page = $notifier->listProvidersPage(perPage: 25, page: 2);
+echo "{$page->total} providers in total";
 
 // List available tags
 $tags = $notifier->listTags(perPage: 50);
