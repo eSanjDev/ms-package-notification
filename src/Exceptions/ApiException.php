@@ -21,6 +21,11 @@ class ApiException extends NotificationClientException
         return $this->responseBody['errors'] ?? [];
     }
 
+    public function isBadRequest(): bool
+    {
+        return $this->statusCode === 400;
+    }
+
     public function isUnauthorized(): bool
     {
         return $this->statusCode === 401;
@@ -31,6 +36,16 @@ class ApiException extends NotificationClientException
         return $this->statusCode === 403;
     }
 
+    public function isPermissionDenied(): bool
+    {
+        return $this->isForbidden();
+    }
+
+    public function isNotFound(): bool
+    {
+        return $this->statusCode === 404;
+    }
+
     public function isValidationError(): bool
     {
         return $this->statusCode === 422;
@@ -39,5 +54,20 @@ class ApiException extends NotificationClientException
     public function isRateLimited(): bool
     {
         return $this->statusCode === 429;
+    }
+
+    public function isServerError(): bool
+    {
+        return $this->statusCode >= 500;
+    }
+
+    public function isConnectionError(): bool
+    {
+        return $this->statusCode === 0;
+    }
+
+    public function isClientInputError(): bool
+    {
+        return $this->isBadRequest() || $this->isValidationError();
     }
 }

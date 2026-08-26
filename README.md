@@ -101,7 +101,7 @@ client therefore retries by method:
 | `401` on any method                         | Once — the token is refreshed and the call replayed immediately (a rejected token proves the request was never processed). A second `401` throws. |
 | `429` on any method                         | Yes — waits for the server's `Retry-After` (capped at 30s) and replays. The throttle rejects before any processing happens, so this is safe for sends too. |
 | `send` / `sendBatch` on a `5xx` or timeout  | Only when `idempotency.enabled` is `true`.            |
-| `403`, and every other `4xx`                | Never — an `ApiException` is thrown at once.          |
+| `400`, `403`, and every other `4xx`         | Never — an `ApiException` is thrown at once.          |
 
 Waits grow exponentially and carry jitter: `retry.sleep_ms` doubles per attempt (1s, 2s, 4s… capped at 10s) with
 half of each delay randomised, so clients that fail at the same moment don't all retry at the same moment. A `429`
@@ -392,9 +392,10 @@ try {
     Log::critical('Notification auth failed', ['error' => $e->getMessage()]);
 
 } catch (ApiException $e) {
-    if ($e->isValidationError()) {
-        // $data was invalid — inspect field errors
-        $errors = $e->getErrors(); // ['recipient' => ['The recipient format is invalid.']]
+    if ($e->isClientInputError()) {
+        // 400 or 422 — the service can't act on what was sent. Fix the request, don't retry.
+        $errors = $e->getErrors();  // 422 only: ['recipient' => ['The recipient format is invalid.']]
+        $reason = $e->getMessage(); // 400: "No active provider found for this client and channel."
     }
     if ($e->isRateLimited()) {
         // Still throttled after backing off — come back later instead of hammering
@@ -425,6 +426,24 @@ tags (null instead of being parsed into a fake "now").
 
 `RateLimitException` and `ApiException::isRateLimited()` both carry `$e->retryAfter` — the server's `Retry-After`
 in seconds, or `null` when it didn't send one. It's exactly what `$job->release()` wants.
+
+### What the status codes mean
+
+`ApiException` has a helper for each one, so you never have to compare `$e->statusCode` by hand:
+
+| Status | Helper | What happened |
+|--------|--------|---------------|
+| `0` | `isConnectionError()` | No response at all — timeout or refused connection |
+| `400` | `isBadRequest()` | The request is well-formed but unusable: **no active provider for this channel**, or the chosen provider doesn't support it. Not a field error, so `getErrors()` is empty — read `$e->getMessage()` |
+| `401` | `isUnauthorized()` | The token was rejected. The client already refreshed and retried once |
+| `403` | `isForbidden()` / `isPermissionDenied()` | The token is fine; this client lacks the service permission for that endpoint. Grant it on the service |
+| `404` | `isNotFound()` | No notification, batch, tag or provider with that identifier |
+| `422` | `isValidationError()` | Field-level validation failed — `getErrors()` returns the map |
+| `429` | `isRateLimited()` | Throttled, and still throttled after the client backed off. `$e->retryAfter` holds the server's hint |
+| `5xx` | `isServerError()` | The service failed, and every allowed retry was used |
+
+`isClientInputError()` covers `400` **and** `422` — the two cases where the fix is in what you sent, not in
+retrying. Checking only `isValidationError()` silently misses the "no active provider" case.
 
 ---
 

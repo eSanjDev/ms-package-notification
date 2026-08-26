@@ -473,18 +473,27 @@ try {
     report($e);
 
 } catch (ApiException $e) {
-    if ($e->isValidationError()) {          // HTTP 422
-        $errors = $e->getErrors();          // e.g. ['recipient' => ['The recipient format is invalid.']]
+    if ($e->isClientInputError()) {         // HTTP 400 or 422 — retrying won't help
+        $errors = $e->getErrors();          // 422: ['recipient' => ['The recipient format is invalid.']]
+        $reason = $e->getMessage();         // 400: 'No active provider found for this client and channel.'
     }
     if ($e->isRateLimited()) {              // HTTP 429, still throttled after backing off
         $this->release($e->retryAfter ?? 60);
     }
     // Always available on ApiException:
-    $e->statusCode;     // int  — e.g. 422, 404, 500, or 0 for connection errors
+    $e->statusCode;     // int  — e.g. 400, 422, 404, 500, or 0 for connection errors
     $e->responseBody;   // array — the decoded JSON error body
     $e->retryAfter;     // ?int — seconds from the `Retry-After` header, on a 429
-    $e->isUnauthorized();   // 401 — the token was rejected
-    $e->isForbidden();      // 403 — the token is fine, this client lacks the service permission
+    // One helper per status, so you never compare $e->statusCode by hand:
+    $e->isConnectionError();  // 0   — no response at all
+    $e->isBadRequest();       // 400 — well-formed but unusable (no active provider for the channel)
+    $e->isUnauthorized();     // 401 — the token was rejected
+    $e->isForbidden();        // 403 — token is fine, this client lacks the service permission
+    $e->isPermissionDenied(); //     — same check, clearer name at the call site
+    $e->isNotFound();         // 404
+    $e->isValidationError();  // 422
+    $e->isRateLimited();      // 429
+    $e->isServerError();      // 5xx
     report($e);
 
 } catch (UnexpectedResponseException $e) {
@@ -506,6 +515,24 @@ try {
 | `ConfigurationException`      | A required `NOTIFICATION_*` setting is missing or invalid.              |
 | `UnexpectedResponseException` | The call succeeded but the body isn't usable JSON, or a guaranteed field is missing. |
 | `NotificationClientException` | Base class — all of the above extend it.                               |
+
+**Every status the service can return, and the helper for it:**
+
+| Status | Helper                                     | What it means                                                             |
+|--------|--------------------------------------------|---------------------------------------------------------------------------|
+| `0`    | `isConnectionError()`                      | No HTTP response — timeout or refused connection.                          |
+| `400`  | `isBadRequest()`                           | Well-formed but unusable: **no active provider for this client and channel**, or the chosen provider doesn't support the channel. `getErrors()` is empty here — the reason is in `getMessage()`. |
+| `401`  | `isUnauthorized()`                         | Token rejected; the client already refreshed and replayed once.            |
+| `403`  | `isForbidden()` / `isPermissionDenied()`   | Token valid, permission missing on the service. Never retried.             |
+| `404`  | `isNotFound()`                             | No such notification, batch, tag or provider.                              |
+| `422`  | `isValidationError()`                      | Field validation failed — `getErrors()` has the per-field map.             |
+| `429`  | `isRateLimited()`                          | Throttled even after the back-off; `$e->retryAfter` has the server's hint. |
+| `5xx`  | `isServerError()`                          | Service failure after every allowed retry.                                 |
+
+> ⚠️ **`400` is not `422`, and both are your input.** The send endpoint answers `400` — not `422` — when no active
+> provider exists for the channel, or when the provider you named doesn't handle it. Code that only checks
+> `isValidationError()` files those under "unexpected error" and pages someone at 3am for what is really a
+> provider-configuration problem. Use `isClientInputError()`, which covers `400` and `422` together.
 
 > 🧩 **Resources fail loudly, or not at all.** A field the API contract guarantees (`uuid`, `id`, `created_at`, …)
 > that arrives missing or null raises an `UnexpectedResponseException` naming the field and listing the keys that did
@@ -835,6 +862,12 @@ production).
 **`ApiException` with `isValidationError()` true (HTTP 422).**
 The service rejected your data. Inspect `$e->getErrors()` — it returns a field-by-field error map and usually tells
 you exactly what's wrong (bad recipient format, missing channel, unknown tag, etc.).
+
+**`ApiException` with `isBadRequest()` true (HTTP 400) — "No active provider found..."**
+Nothing is wrong with your request's shape; the service simply has no active provider for that client and channel,
+or the `providerId` you passed doesn't serve the channel you asked for. `getErrors()` is empty — the explanation is
+in `getMessage()`. Check the client's providers with `listProviders()`, and fix the assignment on the service side.
+Retrying won't help.
 
 **`RateLimitException: Token endpoint rate limit reached...`**
 Every process is fetching its own access token instead of reading the shared one. Point
