@@ -119,6 +119,11 @@ NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log ch
 
 > ⚠️ If you change config, run `php artisan config:clear` so Laravel picks it up.
 
+> ✅ **Miss one of the three and you get a sentence, not a stack trace.** The settings are validated the moment the
+> client is resolved from the container, and a `ConfigurationException` tells you exactly which variable is empty.
+> `NOTIFICATION_SERVICE_URL` must also be a full URL — and in production it must start with `https://`, because the
+> login call carries your `client_secret` in the request body.
+
 See the [Configuration reference](#16-configuration-reference) for every option.
 
 ---
@@ -498,6 +503,7 @@ try {
 | `AuthenticationException`     | The token could not be fetched or refreshed.                           |
 | `RateLimitException`          | The token endpoint answered `429`. Not a credentials problem — see the note below. |
 | `ApiException`                | The API returned an error (validation 4xx, a `429` that outlived the back-off, a 5xx after all retries, or a connection failure). |
+| `ConfigurationException`      | A required `NOTIFICATION_*` setting is missing or invalid.              |
 | `UnexpectedResponseException` | The call succeeded but the payload is missing a guaranteed field.      |
 | `NotificationClientException` | Base class — all of the above extend it.                               |
 
@@ -789,6 +795,15 @@ For reference, here's exactly which microservice endpoints each method calls:
 ---
 
 ## 18. Troubleshooting
+
+**`ConfigurationException: Notification client is not configured: "client_id" is empty...`**
+The named env variable is missing (or empty) in `.env`. Set it and run `php artisan config:clear`. The check runs
+when the client is resolved — the container never hands you a half-configured client, so this can surface inside a
+queue job or a controller the first time something sends a notification.
+
+**`ConfigurationException: NOTIFICATION_SERVICE_URL must use HTTPS in production`**
+The OAuth call sends `client_secret` in the request body, so plain HTTP would expose it. Either give the service an
+HTTPS URL, or — if this environment isn't really production — fix `APP_ENV`. There is no flag to opt out.
 
 **`AuthenticationException: Could not authenticate...`**
 Your `NOTIFICATION_CLIENT_ID` / `NOTIFICATION_CLIENT_SECRET` are wrong, or `NOTIFICATION_SERVICE_URL` is

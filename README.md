@@ -31,9 +31,15 @@ NOTIFICATION_CLIENT_SECRET=your-client-secret
 
 # Optional
 NOTIFICATION_TOKEN_CACHE_STORE=redis        # default: your app's default cache store
+                                            # use a store every process shares — see Token Management
 NOTIFICATION_TOKEN_CACHE_KEY=notif_token    # default: esanj_notification_access_token
 NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log channel
 ```
+
+The first three are required. If any is missing when the client is resolved, you get a
+`ConfigurationException` naming the variable — not a `TypeError` from inside the package. `NOTIFICATION_SERVICE_URL`
+must be a full URL, and **must use `https://` when the app runs in production**: the client-credentials call carries
+your `client_secret`, and plain HTTP hands it to anyone on the network path.
 
 Full config reference (`config/esanj/notification.php`):
 
@@ -404,6 +410,7 @@ try {
 | `AuthenticationException` | Cannot fetch/refresh OAuth token (bad credentials, service unreachable) |
 | `RateLimitException` | The token endpoint returned `429`. Credentials are valid — you're just asking for tokens too often |
 | `ApiException` | Non-retriable HTTP error (4xx, persistent 5xx, or a `429` that survived the back-off) |
+| `ConfigurationException` | The package isn't configured — a missing `NOTIFICATION_*` env var, a `base_url` that isn't a URL, or plain HTTP in production. Thrown when the client is resolved, and the message names the variable to set |
 | `UnexpectedResponseException` | HTTP 200, but the payload is missing a field the contract guarantees. The message names the field and lists the keys that did arrive |
 | `NotificationClientException` | Base class — all exceptions above extend this |
 
