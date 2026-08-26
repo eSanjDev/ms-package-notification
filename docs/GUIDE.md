@@ -273,6 +273,7 @@ $notifier->send(new SendNotificationData(
 | `priority`   | `string`        | `'medium'`   | `'low'`, `'medium'`, or `'high'`.                                  |
 | `tags`       | `string[]`      | `[]`         | Tag names to attach (the tags must already exist on the service). |
 | `options`    | `array`         | `[]`         | Extra options, e.g. `['lock_provider' => true]`.                  |
+| `idempotencyKey` | `string\|null` | `null`      | Stable key that collapses a repeated send into the original one.  |
 
 **Target a specific provider** (channel is inferred, so you can omit it):
 
@@ -456,9 +457,35 @@ try {
 | `ApiException`                | The API returned an error (validation 4xx, or a 5xx after all retries, or a connection failure). |
 | `NotificationClientException` | Base class — both of the above extend it.                              |
 
-> 🔁 **You don't need to retry yourself.** The client automatically retries `retry.attempts` times on `401/403`
-> (refreshing the token first), `5xx` server errors, and connection errors. An exception is only thrown once all
-> retries are exhausted (or immediately for non-retryable errors like `422`).
+> 🔁 **Reads retry themselves.** `GET` calls are retried `retry.attempts` times on `5xx` and connection errors, and
+> a `401/403` is retried on any method after refreshing the token. An exception is thrown once retries are exhausted
+> (or immediately for non-retryable errors like `422`).
+
+> ⚠️ **`send()` and `sendBatch()` are not retried by default.** The service registers the notification and queues it
+> before it replies, so a timed-out or `5xx` send may well have gone through — replaying it would deliver the message
+> twice and bill you twice. The client fails fast instead. To make sends retryable, enable idempotency:
+>
+> ```php
+> // config/esanj/notification.php
+> 'idempotency' => ['enabled' => env('NOTIFICATION_IDEMPOTENCY', false)],
+> ```
+>
+> Turn this on **only** when the service honours the `Idempotency-Key` header and returns the original response for a
+> repeated key; otherwise retries duplicate messages exactly as before. Once enabled, the client generates a key per
+> send and reuses it across that send's retries.
+>
+> When your own application can issue the same send twice (a retried queue job, a double-submitted form), pass a
+> stable `idempotencyKey` on `SendNotificationData` / `SendBatchNotificationData` so both attempts collapse into one
+> notification:
+>
+> ```php
+> new SendNotificationData(
+>     recipient:      $user->mobile,
+>     payload:        SmsPayload::fromMessage("Your code is {$otp->code}"),
+>     channel:        'sms',
+>     idempotencyKey: "otp:{$user->id}:{$otp->id}",
+> );
+> ```
 
 ---
 
@@ -638,8 +665,9 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 | `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token.                    |
 | `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
 | `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires.   |
-| `retry.attempts`         | —                                  | `3`                                  | Total attempts per request (`1` = no retry).                 |
+| `retry.attempts`         | —                                  | `3`                                  | Total attempts per retryable request (`1` = no retry).       |
 | `retry.sleep_ms`         | —                                  | `1000`                               | Milliseconds to wait between retries.                        |
+| `idempotency.enabled`    | `NOTIFICATION_IDEMPOTENCY`         | `false`                              | Service honours `Idempotency-Key`; makes sends retryable.    |
 | `timeout`                | —                                  | `30`                                 | HTTP request timeout, in seconds.                            |
 | `logging.channel`        | `NOTIFICATION_LOG_CHANNEL`         | `null` → app default channel         | Log channel for the package's warnings/errors.               |
 

@@ -56,6 +56,7 @@ class NotificationClientServiceProvider extends ServiceProvider
                 baseUrl:       $config['base_url'],
                 retryAttempts: (int) $config['retry']['attempts'],
                 retrySleepMs:  (int) $config['retry']['sleep_ms'],
+                idempotencySupported: (bool) ($config['idempotency']['enabled'] ?? false),
             );
 
             return new NotificationClient($apiClient);

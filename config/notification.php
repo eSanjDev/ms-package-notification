@@ -36,10 +36,25 @@ return [
     |--------------------------------------------------------------------------
     | attempts  : total number of attempts (1 = no retry)
     | sleep_ms  : milliseconds to wait between retries
+    |
+    | Only GET/HEAD/OPTIONS are retried on server or connection errors. A send is retried solely when
+    | idempotency is enabled below, because a lost response does not mean the service ignored the call.
     */
     'retry' => [
         'attempts' => 3,
         'sleep_ms' => 1000,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Idempotency
+    |--------------------------------------------------------------------------
+    | Enable only when the notification service honours the `Idempotency-Key` header and returns the
+    | original response for a repeated key. Turning this on without server support makes retries send
+    | duplicate messages.
+    */
+    'idempotency' => [
+        'enabled' => env('NOTIFICATION_IDEMPOTENCY', false),
     ],
 
     /*

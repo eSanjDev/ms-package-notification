@@ -19,13 +19,13 @@ class NotificationClient implements NotificationClientInterface
 
     public function send(SendNotificationData $data): NotificationResource
     {
-        $response = $this->apiClient->post('api/v1/send', $data->toArray());
+        $response = $this->apiClient->post('api/v1/send', $data->toArray(), $data->idempotencyKey);
         return NotificationResource::fromArray($response);
     }
 
     public function sendBatch(SendBatchNotificationData $data): BatchResource
     {
-        $response = $this->apiClient->post('api/v1/send-batch', $data->toArray());
+        $response = $this->apiClient->post('api/v1/send-batch', $data->toArray(), $data->idempotencyKey);
         return BatchResource::fromArray($response);
     }
 

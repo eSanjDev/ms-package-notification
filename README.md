@@ -54,6 +54,10 @@ return [
         'sleep_ms' => 1000,   // milliseconds between retries
     ],
 
+    'idempotency' => [
+        'enabled' => env('NOTIFICATION_IDEMPOTENCY', false),   // service honours `Idempotency-Key`
+    ],
+
     'timeout' => 30,
 
     'logging' => [
@@ -73,6 +77,42 @@ Token handling is **fully automatic**:
 3. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
 4. If a request receives an `HTTP 401` or `403`, the package invalidates the cached token, fetches a fresh one, and retries — up to `retry.attempts` times.
 5. If all retries fail, an `ApiException` (or `AuthenticationException`) is thrown and the error is logged.
+
+---
+
+## Retry &amp; Idempotency
+
+A lost response does not mean the service ignored the request. The service creates the notification and queues the
+job *before* it answers, so replaying a `POST /api/v1/send` that timed out sends the message a second time. The
+client therefore retries by method:
+
+| Situation                                   | Retried?                                             |
+|---------------------------------------------|------------------------------------------------------|
+| `GET` on a `5xx` or connection error        | Yes, up to `retry.attempts`.                          |
+| `401` / `403` on any method                 | Yes — the token is refreshed first, and a rejected token proves the request was never processed. |
+| `send` / `sendBatch` on a `5xx` or timeout  | Only when `idempotency.enabled` is `true`.            |
+| `4xx` other than `401`/`403`                | Never — an `ApiException` is thrown at once.          |
+
+With `idempotency.enabled = false` (the default) a failed send throws after a single attempt. Handle it yourself —
+usually by letting the queued job retry with a key of your own, see below.
+
+Set `NOTIFICATION_IDEMPOTENCY=true` **only** if the service honours the `Idempotency-Key` header and replays the
+original response for a repeated key. The client then sends a fresh key with every send and reuses it across that
+call's retries, so a duplicate never reaches your users.
+
+For a send that your application itself can issue twice — a queued job that gets retried, a form the user
+double-submits — pass a stable key so both attempts collapse into one notification:
+
+```php
+Notifier::send(new SendNotificationData(
+    recipient:      $user->mobile,
+    payload:        SmsPayload::fromMessage('Your code is 12345'),
+    channel:        'sms',
+    idempotencyKey: "otp:{$user->id}:{$otp->id}",
+));
+```
+
+The same parameter exists on `SendBatchNotificationData`.
 
 ---
 

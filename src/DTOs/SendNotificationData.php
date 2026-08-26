@@ -14,6 +14,9 @@ final class SendNotificationData
      * @param string          $priority   'low' | 'medium' | 'high'.
      * @param string[]        $tags       Tag names to attach (must exist on the server).
      * @param array           $options    Extra options, e.g. ['lock_provider' => true].
+     * @param string|null     $idempotencyKey Stable key that lets the service collapse a repeated send
+     *                                        into the original one. Pass your own when the same logical
+     *                                        send can be issued more than once (e.g. a retried job).
      */
     public function __construct(
         public readonly string $recipient,
@@ -23,6 +26,7 @@ final class SendNotificationData
         public readonly string $priority = 'medium',
         public readonly array $tags = [],
         public readonly array $options = [],
+        public readonly ?string $idempotencyKey = null,
     ) {}
 
     public function toArray(): array

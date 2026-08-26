@@ -15,6 +15,8 @@ final class SendBatchNotificationData
      * @param string[]         $tags        Tag names to attach.
      * @param string|null      $batchName   Optional label for the batch.
      * @param array            $options     Extra options.
+     * @param string|null      $idempotencyKey Stable key that lets the service collapse a repeated batch
+     *                                         into the original one.
      */
     public function __construct(
         public readonly array $recipients,
@@ -25,6 +27,7 @@ final class SendBatchNotificationData
         public readonly array $tags = [],
         public readonly ?string $batchName = null,
         public readonly array $options = [],
+        public readonly ?string $idempotencyKey = null,
     ) {}
 
     public function toArray(): array
