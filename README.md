@@ -33,6 +33,7 @@ NOTIFICATION_CLIENT_SECRET=your-client-secret
 NOTIFICATION_TOKEN_CACHE_STORE=redis        # default: your app's default cache store
                                             # use a store every process shares — see Token Management
 NOTIFICATION_TOKEN_CACHE_KEY=notif_token    # default: esanj_notification_access_token
+NOTIFICATION_TOKEN_ENCRYPT=true             # default: false — encrypt the cached token with APP_KEY
 NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log channel
 ```
 
@@ -53,6 +54,7 @@ return [
         'cache_store'    => env('NOTIFICATION_TOKEN_CACHE_STORE', null),
         'cache_key'      => env('NOTIFICATION_TOKEN_CACHE_KEY', 'esanj_notification_access_token'),
         'buffer_seconds' => 60,   // refresh token 60 seconds before actual expiry
+        'encrypt'        => env('NOTIFICATION_TOKEN_ENCRYPT', false),
     ],
 
     'retry' => [
@@ -80,7 +82,7 @@ Token handling is **fully automatic**:
 
 1. On the first request the package fetches a token via the OAuth 2.0 client-credentials flow (`POST /api/v1/oauth/token`).
 2. The response is validated before anything is cached — it must carry a usable `access_token` and a numeric `expires_in` longer than `buffer_seconds`. A response missing either is rejected with an `AuthenticationException` rather than cached as a token that is already expired.
-3. The token is stored in your configured cache store with a TTL equal to `expires_in - buffer_seconds`.
+3. The token is stored in your configured cache store with a TTL equal to `expires_in - buffer_seconds`. Set `NOTIFICATION_TOKEN_ENCRYPT=true` to encrypt that cache entry with your `APP_KEY` — worth doing when the store is shared with anything you don't fully trust.
 4. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
 5. Fetching happens behind a cache lock. When the cache is cold — a deploy, a Redis restart, an invalidation — one process fetches the token while the others wait and then read its result, instead of twenty workers hitting the throttled token endpoint at once.
 6. If a request receives an `HTTP 401`, the package invalidates the cached token, fetches a fresh one, and replays the request **once**. A second `401` means the credentials themselves are wrong, so it throws instead of hammering the token endpoint.

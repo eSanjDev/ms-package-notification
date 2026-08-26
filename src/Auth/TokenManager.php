@@ -11,7 +11,9 @@ use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Psr\Log\LoggerInterface;
+use Throwable;
 
 class TokenManager implements TokenManagerInterface
 {
@@ -36,6 +38,7 @@ class TokenManager implements TokenManagerInterface
         private readonly string $tokenEndpoint,
         private readonly string $cacheKey,
         private readonly int $bufferSeconds,
+        private readonly ?Encrypter $encrypter = null,
     ) {}
 
     public function getToken(): Token
@@ -82,13 +85,41 @@ class TokenManager implements TokenManagerInterface
 
     private function cachedToken(): ?Token
     {
-        $cached = $this->cache->get($this->cacheKey);
+        $cached = $this->readToken();
 
-        if ($cached instanceof Token && !$cached->isExpired()) {
+        if ($cached !== null && !$cached->isExpired()) {
             return $this->runtimeToken = $cached;
         }
 
         return null;
+    }
+
+    private function storeToken(Token $token, int $ttl): void
+    {
+        $this->cache->put(
+            $this->cacheKey,
+            $this->encrypter ? $this->encrypter->encrypt($token) : $token,
+            $ttl,
+        );
+    }
+
+    private function readToken(): ?Token
+    {
+        $value = $this->cache->get($this->cacheKey);
+
+        if ($this->encrypter !== null) {
+            if (!is_string($value)) {
+                return null;
+            }
+
+            try {
+                $value = $this->encrypter->decrypt($value);
+            } catch (Throwable) {
+                return null;
+            }
+        }
+
+        return $value instanceof Token ? $value : null;
     }
 
     /**
@@ -174,8 +205,7 @@ class TokenManager implements TokenManagerInterface
 
             $token = $this->parseTokenResponse($data);
 
-            // Derived from the token itself, so the cache TTL can never disagree with isExpired().
-            $this->cache->put($this->cacheKey, $token, max(1, $token->expiresAt - time()));
+            $this->storeToken($token, max(1, $token->expiresAt - time()));
             $this->runtimeToken = $token;
 
             $this->recordRefresh();

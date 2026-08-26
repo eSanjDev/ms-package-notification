@@ -35,6 +35,7 @@ return [
         'cache_store' => env('NOTIFICATION_TOKEN_CACHE_STORE', null), // null = default store
         'cache_key'   => env('NOTIFICATION_TOKEN_CACHE_KEY', 'esanj_notification_access_token'),
         'buffer_seconds' => 60,
+        'encrypt' => env('NOTIFICATION_TOKEN_ENCRYPT', false),
     ],
 
     /*

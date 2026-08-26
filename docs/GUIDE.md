@@ -114,6 +114,7 @@ Everything else is optional and has sensible defaults:
 # Optional
 NOTIFICATION_TOKEN_CACHE_STORE=redis        # default: your app's default cache store
 NOTIFICATION_TOKEN_CACHE_KEY=notif_token    # default: esanj_notification_access_token
+NOTIFICATION_TOKEN_ENCRYPT=true             # default: false — encrypt the cached token with APP_KEY
 NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log channel
 ```
 
@@ -778,6 +779,7 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 | `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token. **Must be shared by every process** — see below. |
 | `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
 | `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires. Must be shorter than the service's `expires_in`. |
+| `token.encrypt`          | `NOTIFICATION_TOKEN_ENCRYPT`       | `false`                              | Encrypt the cached token with `APP_KEY` instead of storing it as-is. |
 | `retry.attempts`         | —                                  | `3`                                  | Total attempts per retryable request (`1` = no retry).       |
 | `retry.sleep_ms`         | —                                  | `1000`                               | Base delay between retries: doubles per attempt (capped at 10s), half of each delay randomised. `0` disables waiting. |
 | `idempotency.enabled`    | `NOTIFICATION_IDEMPOTENCY`         | `false`                              | Service honours `Idempotency-Key`; makes sends retryable.    |
@@ -786,6 +788,16 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 
 > To change `retry`, `timeout`, or `buffer_seconds`, edit `config/esanj/notification.php` directly (these have no
 > env shortcuts), then run `php artisan config:clear`.
+
+> 🔒 **Whoever can read your cache can send notifications as you.** By default the access token sits in the cache
+> the way any cached object does — readable in `storage/framework/cache` with the `file` driver, or to anyone with
+> access to the Redis instance. Set `NOTIFICATION_TOKEN_ENCRYPT=true` and the entry is encrypted with your `APP_KEY`
+> instead. Worth turning on whenever the store is shared, multi-tenant, or reachable without a password; the cost is
+> one `encrypt`/`decrypt` per token, roughly once an hour. Rotating `APP_KEY` doesn't break anything — the old entry
+> simply can't be read, so the client fetches a fresh token. Flipping the setting on or off does the same.
+>
+> This is defence in depth, not a substitute for securing the cache itself: the token is short-lived and `APP_KEY`
+> usually lives on the same host.
 
 > 🔐 **Point `token.cache_store` at a shared store — `redis` or `memcached`.** Two things depend on it. The token
 > itself is shared, so ten workers use one login instead of ten. And the refresh runs behind that store's atomic

@@ -9,6 +9,7 @@ use Esanj\NotificationClient\Exceptions\ConfigurationException;
 use Esanj\NotificationClient\Http\ApiClient;
 use GuzzleHttp\Client;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Support\ServiceProvider;
 use Psr\Log\LoggerInterface;
 
@@ -45,6 +46,7 @@ class NotificationClientServiceProvider extends ServiceProvider
                 tokenEndpoint:  rtrim($config['base_url'], '/') . '/api/v1/oauth/token',
                 cacheKey:       $config['token']['cache_key'],
                 bufferSeconds:  (int) $config['token']['buffer_seconds'],
+                encrypter:      ($config['token']['encrypt'] ?? false) ? $app[Encrypter::class] : null,
             );
         });
 
