@@ -88,7 +88,7 @@ class ApiClient
 
             } catch (ClientException $e) {
                 $status = $e->getResponse()->getStatusCode();
-                $body = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
+                $body = $this->errorBody($e->getResponse());
 
                 $retryAfter = $status === self::RATE_LIMITED_STATUS
                     ? $this->retryAfterSeconds($e->getResponse())
@@ -161,7 +161,7 @@ class ApiClient
 
             } catch (ServerException $e) {
                 $status = $e->getResponse()->getStatusCode();
-                $body = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
+                $body = $this->errorBody($e->getResponse());
 
                 $lastException = new ApiException(
                     message: $body['message'] ?? "HTTP {$status} server error.",
@@ -255,6 +255,13 @@ class ApiClient
                 mb_strimwidth($raw, 0, 200, '…'),
             ));
         }
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function errorBody(ResponseInterface $response): array
+    {
+        $decoded = json_decode((string) $response->getBody(), true);
 
         return is_array($decoded) ? $decoded : [];
     }
