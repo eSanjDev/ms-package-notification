@@ -11,6 +11,7 @@ use Esanj\NotificationClient\Resources\NotificationResource;
 use Esanj\NotificationClient\Resources\PaginatedResult;
 use Esanj\NotificationClient\Resources\ProviderResource;
 use Esanj\NotificationClient\Resources\TagResource;
+use Generator;
 use Illuminate\Support\Facades\Facade;
 
 /**
@@ -18,11 +19,12 @@ use Illuminate\Support\Facades\Facade;
  * @method static BatchResource sendBatch(SendBatchNotificationData $data)
  * @method static NotificationResource getNotification(string $uuid)
  * @method static PaginatedResult listNotifications(?NotificationFilter $filter = null)
+ * @method static Generator eachNotification(?NotificationFilter $filter = null)
  * @method static BatchResource getBatch(string $uuid)
- * @method static PaginatedResult listBatches(int $perPage = 15)
+ * @method static PaginatedResult listBatches(int $perPage = 15, int $page = 1)
  * @method static ProviderResource[] listProviders()
  * @method static ProviderResource getProvider(int $id)
- * @method static PaginatedResult listTags(int $perPage = 15)
+ * @method static PaginatedResult listTags(int $perPage = 15, int $page = 1)
  * @method static TagResource getTag(int $id)
  *
  * @see \Esanj\NotificationClient\NotificationClient

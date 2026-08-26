@@ -2,7 +2,7 @@
 
 namespace Esanj\NotificationClient\Resources;
 
-final class PaginatedResult
+final class PaginatedResult implements \IteratorAggregate, \Countable
 {
     /**
      * @param array $items      Hydrated resource objects.
@@ -46,8 +46,23 @@ final class PaginatedResult
         return $this->currentPage < $this->lastPage;
     }
 
+    public function nextPage(): ?int
+    {
+        return $this->hasMorePages() ? $this->currentPage + 1 : null;
+    }
+
     public function isEmpty(): bool
     {
         return empty($this->items);
+    }
+
+    public function getIterator(): \Traversable
+    {
+        return new \ArrayIterator($this->items);
+    }
+
+    public function count(): int
+    {
+        return count($this->items);
     }
 }

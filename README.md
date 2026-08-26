@@ -75,8 +75,9 @@ Token handling is **fully automatic**:
 1. On the first request the package fetches a token via the OAuth 2.0 client-credentials flow (`POST /api/v1/oauth/token`).
 2. The token is stored in your configured cache store with a TTL equal to `expires_in - buffer_seconds`.
 3. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
-4. If a request receives an `HTTP 401` or `403`, the package invalidates the cached token, fetches a fresh one, and retries — up to `retry.attempts` times.
-5. If all retries fail, an `ApiException` (or `AuthenticationException`) is thrown and the error is logged.
+4. If a request receives an `HTTP 401`, the package invalidates the cached token, fetches a fresh one, and replays the request **once**. A second `401` means the credentials themselves are wrong, so it throws instead of hammering the token endpoint.
+5. An `HTTP 403` is left alone: the token is valid, the client simply has no permission for that endpoint. Refreshing would drop a healthy token for nothing — see `$e->isForbidden()`.
+6. If all retries fail, an `ApiException` (or `AuthenticationException`) is thrown and the error is logged.
 
 ---
 
@@ -89,9 +90,9 @@ client therefore retries by method:
 | Situation                                   | Retried?                                             |
 |---------------------------------------------|------------------------------------------------------|
 | `GET` on a `5xx` or connection error        | Yes, up to `retry.attempts`.                          |
-| `401` / `403` on any method                 | Yes — the token is refreshed first, and a rejected token proves the request was never processed. |
+| `401` on any method                         | Once — the token is refreshed and the call replayed immediately (a rejected token proves the request was never processed). A second `401` throws. |
 | `send` / `sendBatch` on a `5xx` or timeout  | Only when `idempotency.enabled` is `true`.            |
-| `4xx` other than `401`/`403`                | Never — an `ApiException` is thrown at once.          |
+| `403`, and every other `4xx`                | Never — an `ApiException` is thrown at once.          |
 
 With `idempotency.enabled = false` (the default) a failed send throws after a single attempt. Handle it yourself —
 usually by letting the queued job retry with a key of your own, see below.
@@ -277,13 +278,37 @@ $result = $notifier->listNotifications(new NotificationFilter(
     perPage:    20,
     status:     'sent',
     recipients: ['+989123456789'],
+    page:       2,
 ));
 
-foreach ($result->items as $notification) {
+foreach ($result as $notification) {
     echo $notification->uuid . ': ' . $notification->status . PHP_EOL;
 }
 
 echo "Page {$result->currentPage} of {$result->lastPage}, total: {$result->total}";
+```
+
+### Walk every page
+
+`eachNotification()` pulls one page at a time and yields the items lazily, so the whole result set never has to fit
+in memory:
+
+```php
+foreach ($notifier->eachNotification(new NotificationFilter(status: 'failed')) as $notification) {
+    echo $notification->uuid . PHP_EOL;
+}
+```
+
+Driving the loop by hand works too — advance the filter, otherwise you keep re-fetching page 1:
+
+```php
+$filter = new NotificationFilter(perPage: 50);
+
+do {
+    $result = $notifier->listNotifications($filter);
+    // ... use $result->items
+    $filter = $filter->nextPage();
+} while ($result->hasMorePages());
 ```
 
 ### Get single notification
@@ -300,7 +325,7 @@ if ($notification->isSent()) {
 
 ```php
 // List batches
-$result = $notifier->listBatches(perPage: 10);
+$result = $notifier->listBatches(perPage: 10, page: 1);
 
 // Get single batch
 $batch = $notifier->getBatch('batch-uuid');

@@ -4,7 +4,6 @@ namespace Esanj\NotificationClient\Http;
 
 use Esanj\NotificationClient\Contracts\TokenManagerInterface;
 use Esanj\NotificationClient\Exceptions\ApiException;
-use Esanj\NotificationClient\Exceptions\AuthenticationException;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ConnectException;
@@ -14,19 +13,21 @@ use Psr\Log\LoggerInterface;
 
 class ApiClient
 {
-    private const TOKEN_INVALID_STATUSES = [401, 403];
+    private const TOKEN_INVALID_STATUS = 401;
 
     private const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
     public function __construct(
-        private readonly Client $httpClient,
+        private readonly Client                $httpClient,
         private readonly TokenManagerInterface $tokenManager,
-        private readonly LoggerInterface $logger,
-        private readonly string $baseUrl,
-        private readonly int $retryAttempts,
-        private readonly int $retrySleepMs,
-        private readonly bool $idempotencySupported = false,
-    ) {}
+        private readonly LoggerInterface       $logger,
+        private readonly string                $baseUrl,
+        private readonly int                   $retryAttempts,
+        private readonly int                   $retrySleepMs,
+        private readonly bool                  $idempotencySupported = false,
+    )
+    {
+    }
 
     public function get(string $path, array $query = []): array
     {
@@ -51,10 +52,10 @@ class ApiClient
 
         $canRetry = $isSafe || ($idempotencyKey !== null && $this->idempotencySupported);
 
-        $maxAttempts      = max($this->retryAttempts, 1);
-        $attemptsLeft     = $canRetry ? $maxAttempts : 1;
-        $authAttemptsLeft = $maxAttempts - 1;
-        $attempt          = 0;
+        $maxAttempts = max($this->retryAttempts, 1);
+        $attemptsLeft = $canRetry ? $maxAttempts : 1;
+        $tokenRefreshed = false;
+        $attempt = 0;
 
         while ($attemptsLeft > 0) {
             $attempt++;
@@ -65,7 +66,7 @@ class ApiClient
 
                 $headers = [
                     'Authorization' => $token->authorizationHeader(),
-                    'Accept'        => 'application/json',
+                    'Accept' => 'application/json',
                 ];
 
                 if ($idempotencyKey !== null) {
@@ -80,58 +81,48 @@ class ApiClient
 
             } catch (ClientException $e) {
                 $status = $e->getResponse()->getStatusCode();
-                $body   = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
+                $body = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
 
-                // Validation or not-found errors are not retryable
-                if (!in_array($status, self::TOKEN_INVALID_STATUSES, true)) {
-                    throw new ApiException(
-                        message: $body['message'] ?? "HTTP {$status} error.",
-                        statusCode: $status,
-                        responseBody: $body,
-                        previous: $e,
-                    );
-                }
-
-                if ($authAttemptsLeft > 0) {
-                    $authAttemptsLeft--;
-                    $attemptsLeft = max($attemptsLeft, 1);
-
-                    $this->logger->warning('[NotificationClient] Token rejected, refreshing and retrying.', [
-                        'status'  => $status,
-                        'attempt' => $attempt,
-                        'url'     => $url,
-                    ]);
-
-                    $this->tokenManager->invalidate();
-                    $this->tokenManager->refresh();
-                    $this->sleep();
-
-                    $lastException = new ApiException(
-                        message: $body['message'] ?? "HTTP {$status} error.",
-                        statusCode: $status,
-                        responseBody: $body,
-                        previous: $e,
-                    );
-                    continue;
-                }
-
-                // Final attempt with token error
-                $this->logger->error('[NotificationClient] Authentication failed after all retry attempts.', [
-                    'status'   => $status,
-                    'url'      => $url,
-                    'response' => $body,
-                ]);
-
-                throw new ApiException(
+                $apiException = new ApiException(
                     message: $body['message'] ?? "HTTP {$status} error.",
                     statusCode: $status,
                     responseBody: $body,
                     previous: $e,
                 );
 
+                if ($status === self::TOKEN_INVALID_STATUS && !$tokenRefreshed) {
+                    $tokenRefreshed = true;
+                    $attemptsLeft = max($attemptsLeft, 1);
+
+                    $this->logger->warning('[NotificationClient] Token rejected, refreshing and retrying.', [
+                        'attempt' => $attempt,
+                        'url' => $url,
+                    ]);
+
+                    $this->tokenManager->invalidate();
+                    $this->tokenManager->refresh();
+
+                    $lastException = $apiException;
+                    continue;   // no sleep — this is not a network error
+                }
+
+                if ($status === 403) {
+                    $this->logger->error('[NotificationClient] Forbidden — this client lacks the service permission for this endpoint. Refreshing the token will not help.', [
+                        'url' => $url,
+                        'response' => $body,
+                    ]);
+                } elseif ($status === self::TOKEN_INVALID_STATUS) {
+                    $this->logger->error('[NotificationClient] Authentication failed with a freshly refreshed token.', [
+                        'url' => $url,
+                        'response' => $body,
+                    ]);
+                }
+
+                throw $apiException;
+
             } catch (ServerException $e) {
                 $status = $e->getResponse()->getStatusCode();
-                $body   = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
+                $body = json_decode($e->getResponse()->getBody()->getContents(), true) ?? [];
 
                 $lastException = new ApiException(
                     message: $body['message'] ?? "HTTP {$status} server error.",
@@ -142,18 +133,18 @@ class ApiClient
 
                 if ($attemptsLeft <= 0) {
                     $this->logger->error('[NotificationClient] Server error, giving up.', [
-                        'status'    => $status,
-                        'attempt'   => $attempt,
-                        'url'       => $url,
+                        'status' => $status,
+                        'attempt' => $attempt,
+                        'url' => $url,
                         'retryable' => $canRetry,
                     ]);
                     break;
                 }
 
                 $this->logger->warning('[NotificationClient] Server error, retrying.', [
-                    'status'  => $status,
+                    'status' => $status,
                     'attempt' => $attempt,
-                    'url'     => $url,
+                    'url' => $url,
                 ]);
 
                 $this->sleep();
@@ -168,9 +159,9 @@ class ApiClient
 
                 if ($attemptsLeft <= 0) {
                     $this->logger->error('[NotificationClient] Connection error, giving up.', [
-                        'attempt'   => $attempt,
-                        'url'       => $url,
-                        'error'     => $e->getMessage(),
+                        'attempt' => $attempt,
+                        'url' => $url,
+                        'error' => $e->getMessage(),
                         'retryable' => $canRetry,
                     ]);
                     break;
@@ -178,8 +169,8 @@ class ApiClient
 
                 $this->logger->warning('[NotificationClient] Connection error, retrying.', [
                     'attempt' => $attempt,
-                    'url'     => $url,
-                    'error'   => $e->getMessage(),
+                    'url' => $url,
+                    'error' => $e->getMessage(),
                 ]);
 
                 $this->sleep();
@@ -187,8 +178,8 @@ class ApiClient
             } catch (GuzzleException $e) {
                 $this->logger->error('[NotificationClient] Unexpected HTTP error.', [
                     'attempt' => $attempt,
-                    'url'     => $url,
-                    'error'   => $e->getMessage(),
+                    'url' => $url,
+                    'error' => $e->getMessage(),
                 ]);
 
                 throw new ApiException(
@@ -201,7 +192,7 @@ class ApiClient
         }
 
         $this->logger->error('[NotificationClient] Request failed.', [
-            'url'      => $url,
+            'url' => $url,
             'attempts' => $attempt,
         ]);
 

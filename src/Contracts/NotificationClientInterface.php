@@ -10,6 +10,7 @@ use Esanj\NotificationClient\Resources\NotificationResource;
 use Esanj\NotificationClient\Resources\PaginatedResult;
 use Esanj\NotificationClient\Resources\ProviderResource;
 use Esanj\NotificationClient\Resources\TagResource;
+use Generator;
 
 interface NotificationClientInterface
 {
@@ -21,16 +22,17 @@ interface NotificationClientInterface
 
     public function listNotifications(?NotificationFilter $filter = null): PaginatedResult;
 
+    public function eachNotification(?NotificationFilter $filter = null): Generator;
+
     public function getBatch(string $uuid): BatchResource;
 
-    public function listBatches(int $perPage = 15): PaginatedResult;
+    public function listBatches(int $perPage = 15, int $page = 1): PaginatedResult;
 
-    /** @return ProviderResource[] */
     public function listProviders(): array;
 
     public function getProvider(int $id): ProviderResource;
 
-    public function listTags(int $perPage = 15): PaginatedResult;
+    public function listTags(int $perPage = 15, int $page = 1): PaginatedResult;
 
     public function getTag(int $id): TagResource;
 }

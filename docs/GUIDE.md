@@ -362,6 +362,7 @@ $result = $notifier->listNotifications(new NotificationFilter(
     perPage:    20,
     status:     'sent',                  // optional
     recipients: ['+989123456789'],       // optional
+    page:       1,                       // optional, defaults to 1
 ));
 
 foreach ($result->items as $notification) {
@@ -372,20 +373,37 @@ echo "Page {$result->currentPage} of {$result->lastPage}, total: {$result->total
 ```
 
 `listNotifications`, `listBatches`, and `listTags` all return a **`PaginatedResult`** with these properties:
-`items`, `total`, `perPage`, `currentPage`, `lastPage`, `from`, `to`, plus `hasMorePages()` and `isEmpty()`.
+`items`, `total`, `perPage`, `currentPage`, `lastPage`, `from`, `to`, plus `hasMorePages()`, `nextPage()` and
+`isEmpty()`. It is also iterable and countable, so you can `foreach ($result as $item)` and `count($result)`
+directly — `count()` is the size of *this page*, `$result->total` the size of everything.
 
-**Loop through every page:**
+**Loop through every page** — `eachNotification()` fetches one page at a time and yields the items lazily, so
+memory stays flat no matter how many records there are:
 
 ```php
-$page = 1;
+foreach ($notifier->eachNotification(new NotificationFilter(perPage: 50, status: 'failed')) as $n) {
+    // process $n — pages are fetched as you go
+}
+```
+
+If you'd rather drive the loop yourself, ask for pages explicitly. The page number is what moves you forward —
+without it you re-fetch page 1 forever:
+
+```php
+$filter = new NotificationFilter(perPage: 50);
+
 do {
-    $result = $notifier->listNotifications(new NotificationFilter(perPage: 50));
-    foreach ($result->items as $n) {
+    $result = $notifier->listNotifications($filter);
+
+    foreach ($result as $n) {
         // process $n
     }
-    $page++;
+
+    $filter = $filter->nextPage();      // same filter, next page
 } while ($result->hasMorePages());
 ```
+
+`listBatches()` and `listTags()` take the page as a second argument: `listTags(perPage: 50, page: 2)`.
 
 ### Batches
 
@@ -441,8 +459,8 @@ try {
     // Always available on ApiException:
     $e->statusCode;     // int  — e.g. 422, 404, 500, or 0 for connection errors
     $e->responseBody;   // array — the decoded JSON error body
-    $e->isUnauthorized();   // 401
-    $e->isForbidden();      // 403
+    $e->isUnauthorized();   // 401 — the token was rejected
+    $e->isForbidden();      // 403 — the token is fine, this client lacks the service permission
     report($e);
 
 } catch (NotificationClientException $e) {
@@ -457,9 +475,27 @@ try {
 | `ApiException`                | The API returned an error (validation 4xx, or a 5xx after all retries, or a connection failure). |
 | `NotificationClientException` | Base class — both of the above extend it.                              |
 
-> 🔁 **Reads retry themselves.** `GET` calls are retried `retry.attempts` times on `5xx` and connection errors, and
-> a `401/403` is retried on any method after refreshing the token. An exception is thrown once retries are exhausted
-> (or immediately for non-retryable errors like `422`).
+> 🔁 **Reads retry themselves.** `GET` calls are retried `retry.attempts` times on `5xx` and connection errors. A
+> `401` on any method refreshes the token and replays the call once. An exception is thrown once retries are
+> exhausted (or immediately for non-retryable errors like `422`).
+
+> 🚫 **A `403` is never retried.** The service returns it from the `service.permission` middleware: your token is
+> valid, this client just has no permission for that endpoint. Refreshing the token would throw away a healthy one,
+> burn the `/oauth/token` rate limit and force every parallel request to re-authenticate — all while the answer stays
+> `403`. Handle it as the configuration problem it is:
+>
+> ```php
+> catch (ApiException $e) {
+>     if ($e->isForbidden()) {
+>         Log::critical('Notification client lacks the required service permission', [
+>             'response' => $e->responseBody,
+>         ]);
+>     }
+> }
+> ```
+>
+> The fix is on the service: grant this `client_id` the permission (e.g. `tags_list`, `send_single_notification`) in
+> `config/esanj/app_service.php`.
 
 > ⚠️ **`send()` and `sendBatch()` are not retried by default.** The service registers the notification and queues it
 > before it replies, so a timed-out or `5xx` send may well have gone through — replaying it would deliver the message
@@ -687,6 +723,7 @@ For reference, here's exactly which microservice endpoints each method calls:
 | `sendBatch`              | `POST` | `/api/v1/send-batch`                      |
 | `getNotification`        | `GET`  | `/api/v1/notifications/{uuid}`            |
 | `listNotifications`      | `GET`  | `/api/v1/notifications`                   |
+| `eachNotification`       | `GET`  | `/api/v1/notifications` (one call per page) |
 | `getBatch`               | `GET`  | `/api/v1/notification-batches/{uuid}`     |
 | `listBatches`            | `GET`  | `/api/v1/notification-batches`            |
 | `listProviders`          | `GET`  | `/api/v1/client-providers`                |
@@ -709,6 +746,12 @@ production).
 **`ApiException` with `isValidationError()` true (HTTP 422).**
 The service rejected your data. Inspect `$e->getErrors()` — it returns a field-by-field error map and usually tells
 you exactly what's wrong (bad recipient format, missing channel, unknown tag, etc.).
+
+**`ApiException` with `isForbidden()` true (HTTP 403).**
+Your credentials are fine — this client has no permission for that endpoint on the service. Nothing on the client
+side fixes it: grant the permission to your `client_id` in the service's `config/esanj/app_service.php`
+(`tags_list`, `send_single_notification`, `providers_list`, …). The client fails fast here on purpose and does not
+refresh the token.
 
 **My SMS/email never arrives, but `send()` succeeded.**
 `send()` returning `status: 'pending'` only means the service **accepted** it for delivery. Check the real outcome
@@ -744,11 +787,12 @@ $notifier->sendBatch(new SendBatchNotificationData(
 // Look up
 $notifier->getNotification($uuid);
 $notifier->getBatch($batchUuid);
-$notifier->listNotifications(new NotificationFilter(status: 'sent'));
+$notifier->listNotifications(new NotificationFilter(status: 'sent', page: 2));
+foreach ($notifier->eachNotification() as $n) { /* every page, lazily */ }
 
 // Meta
 $notifier->listProviders();
-$notifier->listTags(perPage: 50);
+$notifier->listTags(perPage: 50, page: 1);
 ```
 
 | Payload class       | Channel | How to build                                                            |

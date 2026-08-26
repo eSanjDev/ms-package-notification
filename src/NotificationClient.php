@@ -12,6 +12,7 @@ use Esanj\NotificationClient\Resources\NotificationResource;
 use Esanj\NotificationClient\Resources\PaginatedResult;
 use Esanj\NotificationClient\Resources\ProviderResource;
 use Esanj\NotificationClient\Resources\TagResource;
+use Generator;
 
 class NotificationClient implements NotificationClientInterface
 {
@@ -41,15 +42,37 @@ class NotificationClient implements NotificationClientInterface
         return PaginatedResult::fromArray($response, NotificationResource::fromArray(...));
     }
 
+    public function eachNotification(?NotificationFilter $filter = null): Generator
+    {
+        $filter = $filter ?? new NotificationFilter();
+
+        while (true) {
+            $result = $this->listNotifications($filter);
+
+            foreach ($result->items as $notification) {
+                yield $notification;
+            }
+
+            if (!$result->hasMorePages() || $result->currentPage !== $filter->page) {
+                return;
+            }
+
+            $filter = $filter->nextPage();
+        }
+    }
+
     public function getBatch(string $uuid): BatchResource
     {
         $response = $this->apiClient->get("api/v1/notification-batches/{$uuid}");
         return BatchResource::fromArray($response);
     }
 
-    public function listBatches(int $perPage = 15): PaginatedResult
+    public function listBatches(int $perPage = 15, int $page = 1): PaginatedResult
     {
-        $response = $this->apiClient->get('api/v1/notification-batches', ['per_page' => $perPage]);
+        $response = $this->apiClient->get('api/v1/notification-batches', [
+            'per_page' => $perPage,
+            'page'     => $page,
+        ]);
         return PaginatedResult::fromArray($response, BatchResource::fromArray(...));
     }
 
@@ -65,9 +88,12 @@ class NotificationClient implements NotificationClientInterface
         return ProviderResource::fromArray($response['data'] ?? $response);
     }
 
-    public function listTags(int $perPage = 15): PaginatedResult
+    public function listTags(int $perPage = 15, int $page = 1): PaginatedResult
     {
-        $response = $this->apiClient->get('api/v1/tags', ['per_page' => $perPage]);
+        $response = $this->apiClient->get('api/v1/tags', [
+            'per_page' => $perPage,
+            'page'     => $page,
+        ]);
         return PaginatedResult::fromArray($response, TagResource::fromArray(...));
     }
 
