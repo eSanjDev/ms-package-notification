@@ -412,7 +412,7 @@ try {
 | `RateLimitException` | The token endpoint returned `429`. Credentials are valid — you're just asking for tokens too often |
 | `ApiException` | Non-retriable HTTP error (4xx, persistent 5xx, or a `429` that survived the back-off) |
 | `ConfigurationException` | The package isn't configured — a missing `NOTIFICATION_*` env var, a `base_url` that isn't a URL, or plain HTTP in production. Thrown when the client is resolved, and the message names the variable to set |
-| `UnexpectedResponseException` | HTTP 200, but the payload is missing a field the contract guarantees. The message names the field and lists the keys that did arrive |
+| `UnexpectedResponseException` | HTTP 200, but the body isn't usable JSON (a proxy or WAF page), or the payload is missing a field the contract guarantees. The message quotes the body or names the field |
 | `NotificationClientException` | Base class — all exceptions above extend this |
 
 Fields the service may legitimately leave empty are typed nullable rather than blowing up: `providerName` and

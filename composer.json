@@ -11,6 +11,8 @@
     ],
     "require": {
         "php": "^8.2|^8.3|^8.4",
+        "ext-mbstring": "*",
+        "ext-json": "*",
         "illuminate/support": "^12.0|^13.0",
         "illuminate/contracts": "^12.0|^13.0",
         "illuminate/cache": "^12.0|^13.0",

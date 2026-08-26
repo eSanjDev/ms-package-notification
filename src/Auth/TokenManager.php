@@ -161,10 +161,15 @@ class TokenManager implements TokenManagerInterface
                 'headers' => ['Accept' => 'application/json'],
             ]);
 
-            $data = json_decode($response->getBody()->getContents(), true);
+            $raw = (string) $response->getBody();
+            $data = json_decode($raw, true);
 
             if (!is_array($data)) {
-                throw new AuthenticationException('Notification service returned a non-JSON token response.');
+                throw new AuthenticationException(sprintf(
+                    'Notification service returned a non-JSON token response (HTTP %d): %s',
+                    $response->getStatusCode(),
+                    mb_strimwidth($raw, 0, 200, '…'),
+                ));
             }
 
             $token = $this->parseTokenResponse($data);

@@ -4,6 +4,7 @@ namespace Esanj\NotificationClient\Http;
 
 use Esanj\NotificationClient\Contracts\TokenManagerInterface;
 use Esanj\NotificationClient\Exceptions\ApiException;
+use Esanj\NotificationClient\Exceptions\UnexpectedResponseException;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ConnectException;
@@ -83,7 +84,7 @@ class ApiClient
                     'headers' => $headers,
                 ]));
 
-                return json_decode($response->getBody()->getContents(), true) ?? [];
+                return $this->decodeBody($response);
 
             } catch (ClientException $e) {
                 $status = $e->getResponse()->getStatusCode();
@@ -235,6 +236,27 @@ class ApiClient
         ]);
 
         throw $lastException ?? new ApiException('Request failed after all retry attempts.', 0, []);
+    }
+
+    private function decodeBody(ResponseInterface $response): array
+    {
+        $raw = (string) $response->getBody();
+
+        if ($raw === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new UnexpectedResponseException(sprintf(
+                'Notification service returned a non-JSON response (HTTP %d): %s',
+                $response->getStatusCode(),
+                mb_strimwidth($raw, 0, 200, '…'),
+            ));
+        }
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     private function retryAfterSeconds(ResponseInterface $response): int

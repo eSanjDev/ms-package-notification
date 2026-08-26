@@ -504,7 +504,7 @@ try {
 | `RateLimitException`          | The token endpoint answered `429`. Not a credentials problem — see the note below. |
 | `ApiException`                | The API returned an error (validation 4xx, a `429` that outlived the back-off, a 5xx after all retries, or a connection failure). |
 | `ConfigurationException`      | A required `NOTIFICATION_*` setting is missing or invalid.              |
-| `UnexpectedResponseException` | The call succeeded but the payload is missing a guaranteed field.      |
+| `UnexpectedResponseException` | The call succeeded but the body isn't usable JSON, or a guaranteed field is missing. |
 | `NotificationClientException` | Base class — all of the above extend it.                               |
 
 > 🧩 **Resources fail loudly, or not at all.** A field the API contract guarantees (`uuid`, `id`, `created_at`, …)
@@ -846,6 +846,11 @@ Your credentials are fine — this client has no permission for that endpoint on
 side fixes it: grant the permission to your `client_id` in the service's `config/esanj/app_service.php`
 (`tags_list`, `send_single_notification`, `providers_list`, …). The client fails fast here on purpose and does not
 refresh the token.
+
+**`UnexpectedResponseException: ... returned a non-JSON response (HTTP 200): <!DOCTYPE html>...`**
+Something between you and the service answered instead of the service — a WAF, a load-balancer error page, a proxy
+that swallowed the request. The message quotes the first 200 characters of what actually arrived, which is usually
+enough to identify the culprit. `NOTIFICATION_SERVICE_URL` pointing at the wrong host does this too.
 
 **`UnexpectedResponseException: ... missing required field "provider_name"` (or any other field).**
 The service returned a payload the client cannot trust. The message lists the keys that did arrive — compare them
