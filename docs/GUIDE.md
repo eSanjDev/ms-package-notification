@@ -43,7 +43,8 @@ Once installed and configured, it lets your Laravel app:
 - **List** your providers and tags.
 
 It also handles the boring, error-prone parts for you: logging in to the service (OAuth tokens), caching that
-login, refreshing it when it expires, and retrying failed requests.
+login, refreshing it when it expires (once across all your processes, behind a cache lock), and retrying failed
+requests.
 
 ---
 
@@ -718,7 +719,7 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 | `base_url`               | `NOTIFICATION_SERVICE_URL`         | `http://localhost`                   | Base URL of the notification microservice.                   |
 | `client_id`              | `NOTIFICATION_CLIENT_ID`           | *(none)*                             | OAuth client id.                                             |
 | `client_secret`          | `NOTIFICATION_CLIENT_SECRET`       | *(none)*                             | OAuth client secret.                                        |
-| `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token.                    |
+| `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token. **Must be shared by every process** — see below. |
 | `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
 | `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires.   |
 | `retry.attempts`         | —                                  | `3`                                  | Total attempts per retryable request (`1` = no retry).       |
@@ -729,6 +730,16 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 
 > To change `retry`, `timeout`, or `buffer_seconds`, edit `config/esanj/notification.php` directly (these have no
 > env shortcuts), then run `php artisan config:clear`.
+
+> 🔐 **Point `token.cache_store` at a shared store — `redis` or `memcached`.** Two things depend on it. The token
+> itself is shared, so ten workers use one login instead of ten. And the refresh runs behind that store's atomic
+> lock, so when the cache goes cold (a deploy, a Redis restart, an `invalidate()`) exactly one process calls the
+> token endpoint while the rest wait and then read its result.
+>
+> The token endpoint allows **10 requests per minute per IP**. With twenty queue workers and a per-container store
+> (`file`, `array`), a cold start means twenty simultaneous logins: ten succeed, ten get a `429`, those jobs fail and
+> the queue retries them — a self-inflicted outage. With one shared store it is a single request roughly once an
+> hour. A store with no lock support still works; it just loses the stampede protection.
 
 ---
 
@@ -758,6 +769,11 @@ For reference, here's exactly which microservice endpoints each method calls:
 **`AuthenticationException: Could not authenticate...`**
 Your `NOTIFICATION_CLIENT_ID` / `NOTIFICATION_CLIENT_SECRET` are wrong, or `NOTIFICATION_SERVICE_URL` is
 unreachable. Double-check `.env`, then `php artisan config:clear`.
+
+**`AuthenticationException: Timed out waiting for another process to refresh the access token.`**
+Another process held the token lock for more than 10 seconds and never published a token — usually the token
+endpoint itself is slow or down. Check that the service is reachable and look for the token errors it logged; the
+process that held the lock recorded the real cause.
 
 **Changes to `.env` or config seem ignored.**
 Laravel caches config. Run `php artisan config:clear` (and `php artisan config:cache` again if you cache config in

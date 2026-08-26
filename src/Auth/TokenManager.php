@@ -8,11 +8,17 @@ use Esanj\NotificationClient\Exceptions\RateLimitException;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Psr\Log\LoggerInterface;
 
 class TokenManager implements TokenManagerInterface
 {
+    private const LOCK_SECONDS = 15;
+
+    private const LOCK_WAIT_SECONDS = 10;
+
     private ?Token $runtimeToken = null;
 
     public function __construct(
@@ -32,17 +38,54 @@ class TokenManager implements TokenManagerInterface
             return $this->runtimeToken;
         }
 
-        $cached = $this->cache->get($this->cacheKey);
-
-        if ($cached instanceof Token && !$cached->isExpired()) {
-            $this->runtimeToken = $cached;
-            return $cached;
-        }
-
-        return $this->refresh();
+        return $this->cachedToken() ?? $this->refresh();
     }
 
     public function refresh(): Token
+    {
+        $store = $this->cache->getStore();
+
+        if (!$store instanceof LockProvider) {
+            return $this->fetchToken();
+        }
+
+        $lock = $store->lock($this->cacheKey . ':lock', self::LOCK_SECONDS);
+
+        try {
+            return $lock->block(
+                self::LOCK_WAIT_SECONDS,
+                fn(): Token => $this->cachedToken() ?? $this->fetchToken(),
+            );
+        } catch (LockTimeoutException $e) {
+            $cached = $this->cachedToken();
+
+            if ($cached !== null) {
+                return $cached;
+            }
+
+            $this->logger->error('[NotificationClient] Timed out waiting for another process to refresh the access token.', [
+                'waited' => self::LOCK_WAIT_SECONDS,
+            ]);
+
+            throw new AuthenticationException(
+                'Timed out waiting for another process to refresh the access token.',
+                previous: $e,
+            );
+        }
+    }
+
+    private function cachedToken(): ?Token
+    {
+        $cached = $this->cache->get($this->cacheKey);
+
+        if ($cached instanceof Token && !$cached->isExpired()) {
+            return $this->runtimeToken = $cached;
+        }
+
+        return null;
+    }
+
+    private function fetchToken(): Token
     {
         try {
             $response = $this->httpClient->post($this->tokenEndpoint, [

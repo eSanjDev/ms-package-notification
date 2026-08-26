@@ -23,6 +23,11 @@ return [
     |--------------------------------------------------------------------------
     | buffer_seconds: refresh the token this many seconds before it expires
     |                 to avoid using a token right at its expiry edge.
+    |
+    | cache_store MUST be a store every web process and queue worker can see — redis or memcached.
+    | The token endpoint allows 10 requests per minute per IP; one shared token turns that into about
+    | one request per hour. With a per-container store (file, array) each container fetches its own
+    | token, and enough containers starting at once will exhaust that limit.
     */
     'token' => [
         'cache_store' => env('NOTIFICATION_TOKEN_CACHE_STORE', null), // null = default store
