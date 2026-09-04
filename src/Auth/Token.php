@@ -2,7 +2,7 @@
 
 namespace Esanj\NotificationClient\Auth;
 
-use InvalidArgumentException;
+use Esanj\NotificationClient\Exceptions\InvalidInputException;
 
 final class Token
 {
@@ -14,17 +14,32 @@ final class Token
 
     public static function fromResponse(array $response, int $bufferSeconds = 60): self
     {
-        if (!isset($response['access_token'], $response['expires_in'])) {
-            throw new InvalidArgumentException(
-                'Token response must contain both "access_token" and "expires_in".'
+        $lifetime = self::remainingLifetime($response);
+
+        if (empty($response['access_token']) || $lifetime === null) {
+            throw new InvalidInputException(
+                'Token response must contain "access_token" and either "expires_at" or "expires_in".'
             );
         }
 
         return new self(
             accessToken: (string) $response['access_token'],
             tokenType: (string) ($response['token_type'] ?? 'Bearer'),
-            expiresAt: time() + (int) $response['expires_in'] - $bufferSeconds,
+            expiresAt: time() + max(1, $lifetime - $bufferSeconds),
         );
+    }
+
+    public static function remainingLifetime(array $response): ?int
+    {
+        $expiresAt = $response['expires_at'] ?? null;
+
+        if (is_string($expiresAt) && ($timestamp = strtotime($expiresAt)) !== false) {
+            return $timestamp - time();
+        }
+
+        return is_numeric($response['expires_in'] ?? null)
+            ? (int) $response['expires_in']
+            : null;
     }
 
     public function isExpired(): bool

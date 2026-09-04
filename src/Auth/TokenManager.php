@@ -140,21 +140,20 @@ class TokenManager implements TokenManagerInterface
             ));
         }
 
-        if (!isset($data['expires_in']) || !is_numeric($data['expires_in'])) {
+        $lifetime = Token::remainingLifetime($data);
+
+        if ($lifetime === null) {
             throw new AuthenticationException(sprintf(
-                'Notification service returned a token response without a numeric "expires_in". Received keys: [%s]',
+                'Notification service returned a token response without a usable "expires_at" or numeric '
+                . '"expires_in". Received keys: [%s]',
                 implode(', ', array_keys($data)),
             ));
         }
 
-        $expiresIn = (int) $data['expires_in'];
-
-        if ($expiresIn <= $this->bufferSeconds) {
+        if ($lifetime <= 0) {
             throw new AuthenticationException(sprintf(
-                'Token lifetime (%ds) is not greater than the configured buffer (%ds); lower '
-                . 'token.buffer_seconds or check the service configuration.',
-                $expiresIn,
-                $this->bufferSeconds,
+                'Notification service returned an access token that has already expired (%ds ago).',
+                abs($lifetime),
             ));
         }
 
@@ -179,7 +178,7 @@ class TokenManager implements TokenManagerInterface
         $this->logger->error('[NotificationClient] Access token was fetched repeatedly in a short window — the cached token is not being reused.', [
             'fetches' => count($this->recentRefreshes),
             'within'  => self::REFRESH_STORM_WINDOW,
-            'check'   => 'token.cache_store must be shared across processes, and expires_in must exceed token.buffer_seconds',
+            'check'   => 'token.cache_store must be shared across processes, and the service must report the token\'s remaining life',
         ]);
 
         $this->recentRefreshes = [];
