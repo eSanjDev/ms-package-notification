@@ -649,10 +649,6 @@ For a complete, beginner-friendly, step-by-step walkthrough — installing, send
 building **custom payloads**, swapping the client implementation, testing, and troubleshooting — see
 **[docs/GUIDE.md](docs/GUIDE.md)**.
 
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for release history.
-
 ## License
 
 MIT — © Esanj
