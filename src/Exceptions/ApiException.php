@@ -36,11 +36,6 @@ class ApiException extends NotificationClientException
         return $this->statusCode === 403;
     }
 
-    public function isPermissionDenied(): bool
-    {
-        return $this->isForbidden();
-    }
-
     public function isNotFound(): bool
     {
         return $this->statusCode === 404;
