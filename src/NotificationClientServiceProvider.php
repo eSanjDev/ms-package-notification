@@ -10,6 +10,7 @@ use Esanj\NotificationClient\Http\ApiClient;
 use GuzzleHttp\Client;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Encryption\Encrypter;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
 use Psr\Log\LoggerInterface;
 
@@ -21,26 +22,23 @@ class NotificationClientServiceProvider extends ServiceProvider
         'client_secret' => 'NOTIFICATION_CLIENT_SECRET',
     ];
 
+    private ?array $config = null;
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/notification.php', 'esanj.notification');
 
         $this->app->singleton(TokenManagerInterface::class, function ($app) {
-            $config = $this->validatedConfig($app['config']['esanj']['notification'] ?? []);
+            $config = $this->config($app);
 
             $cacheStore = $config['token']['cache_store']
                 ? $app['cache']->store($config['token']['cache_store'])
                 : $app[CacheRepository::class];
 
-            $logChannel = $config['logging']['channel'];
-            $logger = $logChannel
-                ? $app['log']->channel($logChannel)
-                : $app[LoggerInterface::class];
-
             return new TokenManager(
-                httpClient:     new Client(['timeout' => $config['timeout'], 'connect_timeout' => 10]),
+                httpClient:     $this->httpClient($config),
                 cache:          $cacheStore,
-                logger:         $logger,
+                logger:         $this->logger($app, $config),
                 clientId:       $config['client_id'],
                 clientSecret:   $config['client_secret'],
                 tokenEndpoint:  rtrim($config['base_url'], '/') . '/api/v1/oauth/token',
@@ -52,17 +50,12 @@ class NotificationClientServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(NotificationClientInterface::class, function ($app) {
-            $config = $this->validatedConfig($app['config']['esanj']['notification'] ?? []);
-
-            $logChannel = $config['logging']['channel'];
-            $logger = $logChannel
-                ? $app['log']->channel($logChannel)
-                : $app[LoggerInterface::class];
+            $config = $this->config($app);
 
             $apiClient = new ApiClient(
-                httpClient:    new Client(['timeout' => $config['timeout'], 'connect_timeout' => 10]),
+                httpClient:    $this->httpClient($config),
                 tokenManager:  $app[TokenManagerInterface::class],
-                logger:        $logger,
+                logger:        $this->logger($app, $config),
                 baseUrl:       $config['base_url'],
                 retryAttempts: (int) $config['retry']['attempts'],
                 retrySleepMs:  (int) $config['retry']['sleep_ms'],
@@ -75,7 +68,27 @@ class NotificationClientServiceProvider extends ServiceProvider
         $this->app->alias(NotificationClientInterface::class, NotificationClient::class);
     }
 
-    private function validatedConfig(array $config): array
+    private function config(Application $app): array
+    {
+        return $this->config ??= $this->validate($app['config']['esanj']['notification'] ?? []);
+    }
+
+    private function httpClient(array $config): Client
+    {
+        return new Client([
+            'timeout'         => (int) $config['timeout'],
+            'connect_timeout' => (int) ($config['connect_timeout'] ?? 10),
+        ]);
+    }
+
+    private function logger(Application $app, array $config): LoggerInterface
+    {
+        $channel = $config['logging']['channel'] ?? null;
+
+        return $channel ? $app['log']->channel($channel) : $app[LoggerInterface::class];
+    }
+
+    private function validate(array $config): array
     {
         foreach (self::REQUIRED_CONFIG as $key => $envVar) {
             if (blank($config[$key] ?? null)) {
