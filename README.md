@@ -35,6 +35,8 @@ NOTIFICATION_TOKEN_CACHE_STORE=redis        # default: your app's default cache 
 NOTIFICATION_TOKEN_CACHE_KEY=notif_token    # default: esanj_notification_access_token
 NOTIFICATION_TOKEN_ENCRYPT=true             # default: false — encrypt the cached token with APP_KEY
 NOTIFICATION_LOG_CHANNEL=stack              # default: your app's default log channel
+NOTIFICATION_TIMEOUT=30                     # default: 30 — seconds to wait for a full response
+NOTIFICATION_CONNECT_TIMEOUT=10             # default: 10 — seconds to wait for the connection
 ```
 
 The first three are required. If any is missing when the client is resolved, you get a
@@ -53,7 +55,7 @@ return [
     'token' => [
         'cache_store'    => env('NOTIFICATION_TOKEN_CACHE_STORE', null),
         'cache_key'      => env('NOTIFICATION_TOKEN_CACHE_KEY', 'esanj_notification_access_token'),
-        'buffer_seconds' => 60,   // refresh token 60 seconds before actual expiry
+        'buffer_seconds' => 60,   // refresh this many seconds before the reported expiry
         'encrypt'        => env('NOTIFICATION_TOKEN_ENCRYPT', false),
     ],
 
@@ -66,7 +68,8 @@ return [
         'enabled' => env('NOTIFICATION_IDEMPOTENCY', false),   // service honours `Idempotency-Key`
     ],
 
-    'timeout' => 30,
+    'timeout'         => env('NOTIFICATION_TIMEOUT', 30),
+    'connect_timeout' => env('NOTIFICATION_CONNECT_TIMEOUT', 10),
 
     'logging' => [
         'channel' => env('NOTIFICATION_LOG_CHANNEL', null),
@@ -81,8 +84,8 @@ return [
 Token handling is **fully automatic**:
 
 1. On the first request the package fetches a token via the OAuth 2.0 client-credentials flow (`POST /api/v1/oauth/token`).
-2. The response is validated before anything is cached — it must carry a usable `access_token` and a numeric `expires_in` longer than `buffer_seconds`. A response missing either is rejected with an `AuthenticationException` rather than cached as a token that is already expired.
-3. The token is stored in your configured cache store with a TTL equal to `expires_in - buffer_seconds`. Set `NOTIFICATION_TOKEN_ENCRYPT=true` to encrypt that cache entry with your `APP_KEY` — worth doing when the store is shared with anything you don't fully trust.
+2. The response is validated before anything is cached — it must carry a usable `access_token` and a lifetime the client can read. `expires_at` is preferred over `expires_in`: the service caches its own tokens and keeps reporting the *original* lifetime, so a cached token would otherwise look far fresher than it is and get used past its real expiry. A response carrying neither, or one that has already expired, is rejected with an `AuthenticationException`.
+3. The token is stored in your configured cache store with a TTL equal to its remaining life minus `buffer_seconds`. A token with less life left than the buffer is still used for one call rather than thrown away. Set `NOTIFICATION_TOKEN_ENCRYPT=true` to encrypt that cache entry with your `APP_KEY` — worth doing when the store is shared with anything you don't fully trust.
 4. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
 5. Fetching happens behind a cache lock. When the cache is cold — a deploy, a Redis restart, an invalidation — one process fetches the token while the others wait and then read its result, instead of twenty workers hitting the throttled token endpoint at once.
 6. If a request receives an `HTTP 401`, the package invalidates the cached token, fetches a fresh one, and replays the request **once**. A second `401` means the credentials themselves are wrong, so it throws instead of hammering the token endpoint.
@@ -112,7 +115,12 @@ keeps the server's `Retry-After` as the floor and adds up to a second of spread 
 With `idempotency.enabled = false` (the default) a failed send throws after a single attempt. Handle it yourself —
 usually by letting the queued job retry with a key of your own, see below.
 
-Set `NOTIFICATION_IDEMPOTENCY=true` **only** if the service honours the `Idempotency-Key` header and replays the
+> ⚠️ **The Esanj Notification service does not implement `Idempotency-Key` today.** There is no middleware,
+> config or route handling for it, so the header is accepted and ignored. Leave `NOTIFICATION_IDEMPOTENCY` at its
+> default of `false`; turning it on would make the client retry sends that the service treats as brand new ones,
+> and your users would get the message twice. The parameter below is here for when the service adds support.
+
+Set `NOTIFICATION_IDEMPOTENCY=true` **only** once the service honours the `Idempotency-Key` header and replays the
 original response for a repeated key. The client then sends a fresh key with every send and reuses it across that
 call's retries, so a duplicate never reaches your users.
 
@@ -223,19 +231,51 @@ $notification = $notifier->send(new SendNotificationData(
 ));
 ```
 
-### Using a Template (any channel)
+### Using a Template
+
+A template renders the message body on the service, so you send variables instead of text.
+
+On **SMS**, the template is the whole payload:
 
 ```php
 use Esanj\NotificationClient\DTOs\Payloads\TemplatePayload;
 
 $notification = $notifier->send(new SendNotificationData(
-    recipient: 'user@example.com',
-    payload:   TemplatePayload::make('welcome_email')
-                   ->variables(['name' => 'John', 'plan' => 'Pro'])
+    recipient: '+989123456789',
+    payload:   TemplatePayload::make('otp_sms')
+                   ->variables(['code' => '1234'])
                    ->language('fa'),
+    channel:   'sms',
+));
+```
+
+On **email** and **push** the template replaces the body only — the service still requires a
+`subject` (email) or a `title` (push). Hand the template to those builders instead of sending it on
+its own:
+
+```php
+use Esanj\NotificationClient\DTOs\Payloads\EmailPayload;
+use Esanj\NotificationClient\DTOs\Payloads\TemplatePayload;
+
+$notification = $notifier->send(new SendNotificationData(
+    recipient: 'user@example.com',
+    payload:   EmailPayload::make()
+                   ->subject('Welcome to our platform')
+                   ->template(
+                       TemplatePayload::make('welcome_email')
+                           ->variables(['name' => 'John', 'plan' => 'Pro'])
+                           ->language('fa')
+                   )
+                   ->from('no-reply@example.com', 'Example'),
     channel:   'email',
 ));
 ```
+
+`PushPayload::template()` works the same way alongside `->title(...)`. A bare `TemplatePayload` on
+the email or push channel is rejected with a `422` naming the missing `payload.subject` /
+`payload.title`.
+
+`variables()` is optional — a template with no variables still sends the key, as the service expects.
 
 ### Targeting a Specific Provider
 
@@ -246,6 +286,34 @@ $notification = $notifier->send(new SendNotificationData(
     providerId: 3,   // channel is inferred from the provider
 ));
 ```
+
+### Channels, Priorities and Statuses
+
+`channel`, `priority` and a filter's `status` accept either a plain string or the matching enum. Whichever you
+pass, an unknown value is rejected at construction with an `InvalidInputException` that lists the accepted ones —
+you find out on the line that made the mistake, not after a round trip:
+
+```php
+use Esanj\NotificationClient\Enums\NotificationChannel;
+use Esanj\NotificationClient\Enums\NotificationPriority;
+
+$notification = $notifier->send(new SendNotificationData(
+    recipient: '+989123456789',
+    payload:   SmsPayload::fromMessage('Hello!'),
+    channel:   NotificationChannel::SMS,
+    priority:  NotificationPriority::HIGH,
+));
+```
+
+| Enum | Values |
+|------|--------|
+| `NotificationChannel` | `SMS` · `EMAIL` · `PUSH` |
+| `NotificationPriority` | `LOW` · `MEDIUM` · `HIGH` |
+| `NotificationStatus` | `PENDING` · `QUEUED` · `PROCESSING` · `SENT` · `FAILED` · `DELIVERED` · `UNDELIVERED` |
+| `BatchStatus` | `PENDING` · `PROCESSING` · `CANCELED` · `COMPLETED` |
+
+Leaving `priority` unset sends nothing, so the service applies its own default — `medium` for a single send,
+`low` for a batch.
 
 ### Adding Tags
 
@@ -418,6 +486,7 @@ try {
 | `AuthenticationException` | Cannot fetch/refresh OAuth token (bad credentials, service unreachable) |
 | `RateLimitException` | The token endpoint returned `429`. Credentials are valid — you're just asking for tokens too often |
 | `ApiException` | Non-retriable HTTP error (4xx, persistent 5xx, or a `429` that survived the back-off) |
+| `InvalidInputException` | The call is wrong before it leaves the process: an unknown `channel` / `priority` / `status`, more than 100 recipients in a filter, or `providerId` passed alongside a pattern payload — a pair the service rejects outright |
 | `ConfigurationException` | The package isn't configured — a missing `NOTIFICATION_*` env var, a `base_url` that isn't a URL, or plain HTTP in production. Thrown when the client is resolved, and the message names the variable to set |
 | `UnexpectedResponseException` | HTTP 200, but the body isn't usable JSON (a proxy or WAF page), or the payload is missing a field the contract guarantees. The message quotes the body or names the field |
 | `NotificationClientException` | Base class — all exceptions above extend this |
@@ -438,7 +507,7 @@ in seconds, or `null` when it didn't send one. It's exactly what `$job->release(
 | `0` | `isConnectionError()` | No response at all — timeout or refused connection |
 | `400` | `isBadRequest()` | The request is well-formed but unusable: **no active provider for this channel**, or the chosen provider doesn't support it. Not a field error, so `getErrors()` is empty — read `$e->getMessage()` |
 | `401` | `isUnauthorized()` | The token was rejected. The client already refreshed and retried once |
-| `403` | `isForbidden()` / `isPermissionDenied()` | The token is fine; this client lacks the service permission for that endpoint. Grant it on the service |
+| `403` | `isForbidden()` | The token is fine; this client lacks the service permission for that endpoint. Grant it on the service |
 | `404` | `isNotFound()` | No notification, batch, tag or provider with that identifier |
 | `422` | `isValidationError()` | Field-level validation failed — `getErrors()` returns the map |
 | `429` | `isRateLimited()` | Throttled, and still throttled after the client backed off. `$e->retryAfter` holds the server's hint |
@@ -518,9 +587,9 @@ $notifier = new NotificationClient($apiClient);
 |-------|---------|---------|
 | `SmsPayload` | SMS | `SmsPayload::fromMessage('text')` |
 | `SmsPatternPayload` | SMS | `SmsPatternPayload::make('key', ['var' => 'val'])` |
-| `EmailPayload` | Email | `EmailPayload::make()->subject(...)->html(...)` |
-| `PushPayload` | Push | `PushPayload::make()->title(...)->body(...)` |
-| `TemplatePayload` | Any | `TemplatePayload::make('key')->variables([...])->language('fa')` |
+| `EmailPayload` | Email | `EmailPayload::make()->subject(...)->html(...)` or `->template(...)` |
+| `PushPayload` | Push | `PushPayload::make()->title(...)->body(...)` or `->template(...)` |
+| `TemplatePayload` | SMS alone; email/push via their `->template()` | `TemplatePayload::make('key')->variables([...])->language('fa')` |
 
 ---
 
@@ -537,6 +606,7 @@ $notifier = new NotificationClient($apiClient);
 | `sentAt` | `CarbonImmutable\|null` | When the message was sent |
 | `createdAt` | `CarbonImmutable` | |
 | `updatedAt` | `CarbonImmutable\|null` | Null when the service didn't send one |
+| `isSent()` / `isDelivered()` / `isFailed()` / `isPending()` | `bool` | `isFailed()` covers `failed` and `undelivered`; `isPending()` covers `pending`, `queued` and `processing` |
 
 ### `BatchResource`
 | Property | Type | Description |
@@ -548,6 +618,7 @@ $notifier = new NotificationClient($apiClient);
 | `createdAt` | `CarbonImmutable` | |
 | `updatedAt` | `CarbonImmutable\|null` | Null when the service didn't send one |
 | `progressPercentage()` | `float` | Computed progress 0–100 |
+| `isPending()` / `isProcessing()` / `isCanceled()` / `isCompleted()` | `bool` | One per batch state |
 
 ### `ProviderResource`
 | Property | Type | Description |

@@ -245,21 +245,53 @@ $notifier->send(new SendNotificationData(
 ));
 ```
 
-### Template (works for any channel)
+### Template
 
-Use a template stored on the service, with variables and an optional language:
+A template lives on the service and renders the message body there, so you send variables instead of
+text. How you attach it depends on the channel.
+
+On **SMS** the template is the entire payload:
 
 ```php
 use Esanj\NotificationClient\DTOs\Payloads\TemplatePayload;
 
 $notifier->send(new SendNotificationData(
-    recipient: 'user@example.com',
-    payload:   TemplatePayload::make('welcome_email')
-                   ->variables(['name' => 'John', 'plan' => 'Pro'])
+    recipient: '+989123456789',
+    payload:   TemplatePayload::make('otp_sms')
+                   ->variables(['code' => '1234'])
                    ->language('fa'),
+    channel:   'sms',
+));
+```
+
+On **email** and **push** the template replaces the body only. The service still requires a subject
+(email) or a title (push) — it uses them for the envelope, not the body — so pass the template to
+those builders:
+
+```php
+use Esanj\NotificationClient\DTOs\Payloads\EmailPayload;
+use Esanj\NotificationClient\DTOs\Payloads\TemplatePayload;
+
+$notifier->send(new SendNotificationData(
+    recipient: 'user@example.com',
+    payload:   EmailPayload::make()
+                   ->subject('Welcome to our platform')
+                   ->template(
+                       TemplatePayload::make('welcome_email')
+                           ->variables(['name' => 'John', 'plan' => 'Pro'])
+                           ->language('fa')
+                   )
+                   ->from('no-reply@example.com', 'Example'),
     channel:   'email',
 ));
 ```
+
+`PushPayload::template()` is the same, next to `->title(...)`. Sending a bare `TemplatePayload` on
+the email or push channel comes back as a `422` naming the missing `payload.subject` /
+`payload.title`.
+
+> 💡 **`variables()` is optional.** A template that takes no variables still sends the key — the
+> service requires it to be present, and `TemplatePayload` always includes it.
 
 > 💡 **Builders are immutable.** Each method (`->subject()`, `->html()`, …) returns a **new copy**. So
 > `$p = EmailPayload::make(); $p->subject('Hi');` on its own does nothing — you must keep the returned value:
@@ -275,9 +307,9 @@ $notifier->send(new SendNotificationData(
 |--------------|-----------------|--------------|--------------------------------------------------------------------|
 | `recipient`  | `string`        | *(required)* | Phone / email / device token.                                      |
 | `payload`    | `PayloadInterface` | *(required)* | One of the payload objects.                                     |
-| `channel`    | `string\|null`  | `null`       | `'sms'`, `'email'`, or `'push'`. **Required unless** `providerId` is set. |
-| `providerId` | `int\|null`     | `null`       | Send through a specific provider. Channel is inferred from it.     |
-| `priority`   | `string`        | `'medium'`   | `'low'`, `'medium'`, or `'high'`.                                  |
+| `channel`    | `string\|null`  | `null`       | `'sms'`, `'email'`, `'push'`, or a `NotificationChannel` case. **Required unless** `providerId` is set. |
+| `providerId` | `int\|null`     | `null`       | Send through a specific provider. Channel is inferred from it. Cannot be combined with a pattern payload. |
+| `priority`   | `string\|null`  | `null`       | `'low'`, `'medium'`, `'high'`, or a `NotificationPriority` case. Left unset, the service applies its own default. |
 | `tags`       | `string[]`      | `[]`         | Tag names to attach (the tags must already exist on the service). |
 | `options`    | `array`         | `[]`         | Extra options, e.g. `['lock_provider' => true]`.                  |
 | `idempotencyKey` | `string\|null` | `null`      | Stable key that collapses a repeated send into the original one.  |
@@ -329,7 +361,7 @@ $batch = $notifier->sendBatch(new SendBatchNotificationData(
     recipients: ['+989111111111', '+989222222222', '+989333333333'], // up to 5000
     payload:    SmsPayload::fromMessage('Hello everyone!'),
     channel:    'sms',
-    priority:   'low',                  // batches default to 'low'
+    priority:   'low',                  // omit it and the service uses its own batch default
     batchName:  'Summer Campaign 2025', // optional label
     tags:       ['marketing'],
 ));
@@ -490,7 +522,6 @@ try {
     $e->isBadRequest();       // 400 — well-formed but unusable (no active provider for the channel)
     $e->isUnauthorized();     // 401 — the token was rejected
     $e->isForbidden();        // 403 — token is fine, this client lacks the service permission
-    $e->isPermissionDenied(); //     — same check, clearer name at the call site
     $e->isNotFound();         // 404
     $e->isValidationError();  // 422
     $e->isRateLimited();      // 429
@@ -524,7 +555,7 @@ try {
 | `0`    | `isConnectionError()`                      | No HTTP response — timeout or refused connection.                          |
 | `400`  | `isBadRequest()`                           | Well-formed but unusable: **no active provider for this client and channel**, or the chosen provider doesn't support the channel. `getErrors()` is empty here — the reason is in `getMessage()`. |
 | `401`  | `isUnauthorized()`                         | Token rejected; the client already refreshed and replayed once.            |
-| `403`  | `isForbidden()` / `isPermissionDenied()`   | Token valid, permission missing on the service. Never retried.             |
+| `403`  | `isForbidden()`                            | Token valid, permission missing on the service. Never retried.             |
 | `404`  | `isNotFound()`                             | No such notification, batch, tag or provider.                              |
 | `422`  | `isValidationError()`                      | Field validation failed — `getErrors()` has the per-field map.             |
 | `429`  | `isRateLimited()`                          | Throttled even after the back-off; `$e->retryAfter` has the server's hint. |
@@ -957,9 +988,9 @@ $notifier->listTags(perPage: 50, page: 1);
 |---------------------|---------|-------------------------------------------------------------------------|
 | `SmsPayload`        | SMS     | `SmsPayload::fromMessage('text')`                                       |
 | `SmsPatternPayload` | SMS     | `SmsPatternPayload::make('key', ['var' => 'val'])`                      |
-| `EmailPayload`      | Email   | `EmailPayload::make()->subject(...)->html(...)->text(...)`              |
-| `PushPayload`       | Push    | `PushPayload::make()->title(...)->body(...)->url(...)->data([...])`     |
-| `TemplatePayload`   | Any     | `TemplatePayload::make('key')->variables([...])->language('fa')`        |
+| `EmailPayload`      | Email   | `EmailPayload::make()->subject(...)->html(...)` or `->template(...)`    |
+| `PushPayload`       | Push    | `PushPayload::make()->title(...)->body(...)` or `->template(...)`       |
+| `TemplatePayload`   | SMS     | `TemplatePayload::make('key')->variables([...])->language('fa')` — for email/push pass it to their `->template()` |
 | *your own*          | Any     | implement `PayloadInterface::toArray()` — see [section 13](#13-recipe-create-your-own-custom-payload) |
 
 ```bash
