@@ -3,6 +3,7 @@
 namespace Esanj\NotificationClient\Resources;
 
 use Carbon\CarbonImmutable;
+use Esanj\NotificationClient\Enums\BatchStatus;
 use Esanj\NotificationClient\Resources\Concerns\HydratesSafely;
 
 final class BatchResource
@@ -18,10 +19,8 @@ final class BatchResource
         public readonly ?CarbonImmutable $updatedAt,
     ) {}
 
-    public static function fromArray(array $response): self
+    public static function fromArray(array $item): self
     {
-        $item = $response['data'] ?? $response;
-
         return new self(
             uuid:                   self::requiredString($item, 'uuid'),
             status:                 self::requiredString($item, 'status'),
@@ -41,13 +40,23 @@ final class BatchResource
         return round(($this->processedNotifications / $this->totalNotifications) * 100, 2);
     }
 
-    public function isCompleted(): bool
-    {
-        return $this->status === 'completed';
-    }
-
     public function isPending(): bool
     {
-        return $this->status === 'pending';
+        return $this->status === BatchStatus::PENDING->value;
+    }
+
+    public function isProcessing(): bool
+    {
+        return $this->status === BatchStatus::PROCESSING->value;
+    }
+
+    public function isCanceled(): bool
+    {
+        return $this->status === BatchStatus::CANCELED->value;
+    }
+
+    public function isCompleted(): bool
+    {
+        return $this->status === BatchStatus::COMPLETED->value;
     }
 }

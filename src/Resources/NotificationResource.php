@@ -3,6 +3,7 @@
 namespace Esanj\NotificationClient\Resources;
 
 use Carbon\CarbonImmutable;
+use Esanj\NotificationClient\Enums\NotificationStatus;
 use Esanj\NotificationClient\Resources\Concerns\HydratesSafely;
 
 final class NotificationResource
@@ -20,10 +21,8 @@ final class NotificationResource
         public readonly ?CarbonImmutable $updatedAt,
     ) {}
 
-    public static function fromArray(array $response): self
+    public static function fromArray(array $item): self
     {
-        $item = $response['data'] ?? $response;
-
         return new self(
             uuid:      self::requiredString($item, 'uuid'),
             status:    self::requiredString($item, 'status'),
@@ -38,16 +37,28 @@ final class NotificationResource
 
     public function isSent(): bool
     {
-        return $this->status === 'sent';
+        return $this->status === NotificationStatus::SENT->value;
+    }
+
+    public function isDelivered(): bool
+    {
+        return $this->status === NotificationStatus::DELIVERED->value;
     }
 
     public function isFailed(): bool
     {
-        return $this->status === 'failed';
+        return in_array($this->status, [
+            NotificationStatus::FAILED->value,
+            NotificationStatus::UNDELIVERED->value,
+        ], true);
     }
 
     public function isPending(): bool
     {
-        return in_array($this->status, ['pending', 'queued', 'processing'], true);
+        return in_array($this->status, [
+            NotificationStatus::PENDING->value,
+            NotificationStatus::QUEUED->value,
+            NotificationStatus::PROCESSING->value,
+        ], true);
     }
 }
