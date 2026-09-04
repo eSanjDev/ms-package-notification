@@ -2,27 +2,46 @@
 
 namespace Esanj\NotificationClient\DTOs;
 
+use Esanj\NotificationClient\Enums\NotificationStatus;
+use Esanj\NotificationClient\Exceptions\InvalidInputException;
+
 final class NotificationFilter
 {
-    /**
-     * @param int          $perPage    Results per page (1–100).
-     * @param string|null  $status     Filter by status: pending|queued|processing|sent|failed|delivered|undelivered.
-     * @param string[]     $recipients Filter by specific recipients.
-     * @param int          $page       Page number to fetch, starting at 1.
-     */
+    private const MAX_PER_PAGE = 100;
+
+    private const MAX_RECIPIENTS = 100;
+
+    public readonly int $perPage;
+    public readonly int $page;
+    public readonly ?string $status;
+
+
     public function __construct(
-        public readonly int $perPage = 15,
-        public readonly ?string $status = null,
-        public readonly array $recipients = [],
-        public readonly int $page = 1,
-    ) {}
+        int                            $perPage = 15,
+        NotificationStatus|string|null $status = null,
+        public readonly array          $recipients = [],
+        int                            $page = 1,
+    )
+    {
+        if (count($recipients) > self::MAX_RECIPIENTS) {
+            throw new InvalidInputException(sprintf(
+                'The notification service filters on at most %d recipients at a time; %d given.',
+                self::MAX_RECIPIENTS,
+                count($recipients),
+            ));
+        }
+
+        $this->perPage = min(max($perPage, 1), self::MAX_PER_PAGE);
+        $this->page = max($page, 1);
+        $this->status = NotificationStatus::normalize($status, 'status');
+    }
 
     public function toArray(): array
     {
         return array_filter([
-            'per_page'   => $this->perPage,
-            'page'       => $this->page,
-            'status'     => $this->status,
+            'per_page' => $this->perPage,
+            'page' => $this->page,
+            'status' => $this->status,
             'recipients' => $this->recipients ?: null,
         ], fn($v) => $v !== null);
     }
