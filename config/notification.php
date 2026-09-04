@@ -21,10 +21,10 @@ return [
     |--------------------------------------------------------------------------
     | Token Cache Settings
     |--------------------------------------------------------------------------
-    | buffer_seconds: refresh the token this many seconds before it expires
-    |                 to avoid using a token right at its expiry edge. It must stay below the
-    |                 lifetime the service reports in `expires_in`, otherwise every token would be
-    |                 born expired; the client rejects such a response instead of looping.
+    | buffer_seconds: refresh the token this many seconds before it expires, so it is never used
+    |                 right at its expiry edge. The client reads `expires_at` when the service sends
+    |                 it and falls back to `expires_in`; a token with less life left than the buffer
+    |                 is still used for one call rather than rejected.
     |
     | cache_store MUST be a store every web process and queue worker can see — redis or memcached.
     | The token endpoint allows 10 requests per minute per IP; one shared token turns that into about
@@ -69,10 +69,13 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | HTTP Timeout
+    | HTTP Timeouts
     |--------------------------------------------------------------------------
+    | timeout         : how long to wait for a complete response.
+    | connect_timeout : how long to wait for the connection itself to open.
     */
-    'timeout' => 30,
+    'timeout' => env('NOTIFICATION_TIMEOUT', 30),
+    'connect_timeout' => env('NOTIFICATION_CONNECT_TIMEOUT', 10),
 
     /*
     |--------------------------------------------------------------------------
