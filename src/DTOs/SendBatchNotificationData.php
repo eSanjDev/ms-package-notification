@@ -3,32 +3,33 @@
 namespace Esanj\NotificationClient\DTOs;
 
 use Esanj\NotificationClient\Contracts\PayloadInterface;
+use Esanj\NotificationClient\DTOs\Concerns\RejectsProviderWithPattern;
+use Esanj\NotificationClient\Enums\NotificationChannel;
+use Esanj\NotificationClient\Enums\NotificationPriority;
 
 final class SendBatchNotificationData
 {
-    /**
-     * @param string[]         $recipients  List of recipients (max 5000).
-     * @param PayloadInterface $payload     SmsPayload, EmailPayload, PushPayload, etc.
-     * @param string|null      $channel     'sms' | 'email' | 'push'. Required when $providerId is null.
-     * @param int|null         $providerId  Specific provider ID.
-     * @param string           $priority    'low' | 'medium' | 'high'.
-     * @param string[]         $tags        Tag names to attach.
-     * @param string|null      $batchName   Optional label for the batch.
-     * @param array            $options     Extra options.
-     * @param string|null      $idempotencyKey Stable key that lets the service collapse a repeated batch
-     *                                         into the original one.
-     */
+    use RejectsProviderWithPattern;
+
+    public readonly ?string $channel;
+    public readonly ?string $priority;
+
     public function __construct(
         public readonly array $recipients,
         public readonly PayloadInterface $payload,
-        public readonly ?string $channel = null,
+        NotificationChannel|string|null $channel = null,
         public readonly ?int $providerId = null,
-        public readonly string $priority = 'low',
+        NotificationPriority|string|null $priority = null,
         public readonly array $tags = [],
         public readonly ?string $batchName = null,
         public readonly array $options = [],
         public readonly ?string $idempotencyKey = null,
-    ) {}
+    ) {
+        $this->channel = NotificationChannel::normalize($channel, 'channel');
+        $this->priority = NotificationPriority::normalize($priority, 'priority');
+
+        $this->assertProviderAllowed($payload, $providerId);
+    }
 
     public function toArray(): array
     {

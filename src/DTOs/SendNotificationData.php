@@ -3,31 +3,32 @@
 namespace Esanj\NotificationClient\DTOs;
 
 use Esanj\NotificationClient\Contracts\PayloadInterface;
+use Esanj\NotificationClient\DTOs\Concerns\RejectsProviderWithPattern;
+use Esanj\NotificationClient\Enums\NotificationChannel;
+use Esanj\NotificationClient\Enums\NotificationPriority;
 
 final class SendNotificationData
 {
-    /**
-     * @param string          $recipient  Phone / email / device token.
-     * @param PayloadInterface $payload   SmsPayload, EmailPayload, PushPayload, etc.
-     * @param string|null     $channel    'sms' | 'email' | 'push'. Required when $providerId is null.
-     * @param int|null        $providerId Specific provider ID. Overrides $channel-based selection.
-     * @param string          $priority   'low' | 'medium' | 'high'.
-     * @param string[]        $tags       Tag names to attach (must exist on the server).
-     * @param array           $options    Extra options, e.g. ['lock_provider' => true].
-     * @param string|null     $idempotencyKey Stable key that lets the service collapse a repeated send
-     *                                        into the original one. Pass your own when the same logical
-     *                                        send can be issued more than once (e.g. a retried job).
-     */
+    use RejectsProviderWithPattern;
+
+    public readonly ?string $channel;
+    public readonly ?string $priority;
+
     public function __construct(
         public readonly string $recipient,
         public readonly PayloadInterface $payload,
-        public readonly ?string $channel = null,
+        NotificationChannel|string|null $channel = null,
         public readonly ?int $providerId = null,
-        public readonly string $priority = 'medium',
+        NotificationPriority|string|null $priority = null,
         public readonly array $tags = [],
         public readonly array $options = [],
         public readonly ?string $idempotencyKey = null,
-    ) {}
+    ) {
+        $this->channel = NotificationChannel::normalize($channel, 'channel');
+        $this->priority = NotificationPriority::normalize($priority, 'priority');
+
+        $this->assertProviderAllowed($payload, $providerId);
+    }
 
     public function toArray(): array
     {
