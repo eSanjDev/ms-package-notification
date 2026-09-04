@@ -6,7 +6,7 @@ use Esanj\NotificationClient\Contracts\PayloadInterface;
 
 final class TemplatePayload implements PayloadInterface
 {
-    private ?array $variables = null;
+    private array $variables = [];
     private ?string $language = null;
 
     private function __construct(
@@ -34,12 +34,15 @@ final class TemplatePayload implements PayloadInterface
 
     public function toArray(): array
     {
-        return [
-            'template' => array_filter([
-                'key'       => $this->key,
-                'variables' => $this->variables,
-                'language'  => $this->language,
-            ], fn($v) => $v !== null),
+        $template = [
+            'key'       => $this->key,
+            'variables' => $this->variables,
         ];
+
+        if ($this->language !== null) {
+            $template['language'] = $this->language;
+        }
+
+        return ['template' => $template];
     }
 }
