@@ -9,6 +9,7 @@ final class PushPayload implements PayloadInterface
     private ?string $title = null;
     private ?string $body = null;
     private ?string $url = null;
+    private ?TemplatePayload $template = null;
     private array $data = [];
 
     private function __construct() {}
@@ -32,6 +33,13 @@ final class PushPayload implements PayloadInterface
         return $clone;
     }
 
+    public function template(TemplatePayload $template): self
+    {
+        $clone = clone $this;
+        $clone->template = $template;
+        return $clone;
+    }
+
     public function url(string $url): self
     {
         $clone = clone $this;
@@ -48,11 +56,15 @@ final class PushPayload implements PayloadInterface
 
     public function toArray(): array
     {
-        return array_filter([
+        $payload = array_filter([
             'title' => $this->title,
             'body'  => $this->body,
             'url'   => $this->url,
             'data'  => $this->data ?: null,
         ], fn($v) => $v !== null);
+
+        return $this->template === null
+            ? $payload
+            : array_merge($payload, $this->template->toArray());
     }
 }

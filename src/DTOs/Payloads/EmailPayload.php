@@ -12,6 +12,7 @@ final class EmailPayload implements PayloadInterface
     private ?string $fromEmail = null;
     private ?string $fromName = null;
     private ?string $replyTo = null;
+    private ?TemplatePayload $template = null;
     private array $cc = [];
     private array $bcc = [];
 
@@ -40,6 +41,13 @@ final class EmailPayload implements PayloadInterface
     {
         $clone = clone $this;
         $clone->textBody = $text;
+        return $clone;
+    }
+
+    public function template(TemplatePayload $template): self
+    {
+        $clone = clone $this;
+        $clone->template = $template;
         return $clone;
     }
 
@@ -74,7 +82,7 @@ final class EmailPayload implements PayloadInterface
 
     public function toArray(): array
     {
-        return array_filter([
+        $payload = array_filter([
             'subject'    => $this->subject,
             'html_body'  => $this->htmlBody,
             'text_body'  => $this->textBody,
@@ -84,5 +92,9 @@ final class EmailPayload implements PayloadInterface
             'cc'         => $this->cc ?: null,
             'bcc'        => $this->bcc ?: null,
         ], fn($v) => $v !== null);
+
+        return $this->template === null
+            ? $payload
+            : array_merge($payload, $this->template->toArray());
     }
 }
