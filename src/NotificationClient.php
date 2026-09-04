@@ -23,19 +23,19 @@ class NotificationClient implements NotificationClientInterface
     public function send(SendNotificationData $data): NotificationResource
     {
         $response = $this->apiClient->post('api/v1/send', $data->toArray(), $data->idempotencyKey);
-        return NotificationResource::fromArray($response);
+        return NotificationResource::fromArray($this->item($response));
     }
 
     public function sendBatch(SendBatchNotificationData $data): BatchResource
     {
         $response = $this->apiClient->post('api/v1/send-batch', $data->toArray(), $data->idempotencyKey);
-        return BatchResource::fromArray($response);
+        return BatchResource::fromArray($this->item($response));
     }
 
     public function getNotification(string $uuid): NotificationResource
     {
         $response = $this->apiClient->get("api/v1/notifications/{$uuid}");
-        return NotificationResource::fromArray($response);
+        return NotificationResource::fromArray($this->item($response));
     }
 
     public function listNotifications(?NotificationFilter $filter = null): PaginatedResult
@@ -66,14 +66,14 @@ class NotificationClient implements NotificationClientInterface
     public function getBatch(string $uuid): BatchResource
     {
         $response = $this->apiClient->get("api/v1/notification-batches/{$uuid}");
-        return BatchResource::fromArray($response);
+        return BatchResource::fromArray($this->item($response));
     }
 
     public function listBatches(int $perPage = 15, int $page = 1): PaginatedResult
     {
         $response = $this->apiClient->get('api/v1/notification-batches', [
-            'per_page' => $perPage,
-            'page'     => $page,
+            'per_page' => $this->perPage($perPage),
+            'page'     => max($page, 1),
         ]);
         return PaginatedResult::fromArray($response, BatchResource::fromArray(...));
     }
@@ -98,8 +98,8 @@ class NotificationClient implements NotificationClientInterface
     public function listProvidersPage(int $perPage = self::MAX_PER_PAGE, int $page = 1): PaginatedResult
     {
         $response = $this->apiClient->get('api/v1/client-providers', [
-            'per_page' => min(max($perPage, 1), self::MAX_PER_PAGE),
-            'page'     => $page,
+            'per_page' => $this->perPage($perPage),
+            'page'     => max($page, 1),
         ]);
 
         return PaginatedResult::fromArray($response, ProviderResource::fromArray(...));
@@ -108,14 +108,14 @@ class NotificationClient implements NotificationClientInterface
     public function getProvider(int $id): ProviderResource
     {
         $response = $this->apiClient->get("api/v1/client-providers/{$id}");
-        return ProviderResource::fromArray($response['data'] ?? $response);
+        return ProviderResource::fromArray($this->item($response));
     }
 
     public function listTags(int $perPage = 15, int $page = 1): PaginatedResult
     {
         $response = $this->apiClient->get('api/v1/tags', [
-            'per_page' => $perPage,
-            'page'     => $page,
+            'per_page' => $this->perPage($perPage),
+            'page'     => max($page, 1),
         ]);
         return PaginatedResult::fromArray($response, TagResource::fromArray(...));
     }
@@ -123,6 +123,16 @@ class NotificationClient implements NotificationClientInterface
     public function getTag(int $id): TagResource
     {
         $response = $this->apiClient->get("api/v1/tags/{$id}");
-        return TagResource::fromArray($response['data'] ?? $response);
+        return TagResource::fromArray($this->item($response));
+    }
+
+    private function item(array $response): array
+    {
+        return $response['data'] ?? $response;
+    }
+
+    private function perPage(int $perPage): int
+    {
+        return min(max($perPage, 1), self::MAX_PER_PAGE);
     }
 }
