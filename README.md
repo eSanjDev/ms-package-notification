@@ -88,7 +88,7 @@ Token handling is **fully automatic**:
 3. The token is stored in your configured cache store with a TTL equal to its remaining life minus `buffer_seconds`. A token with less life left than the buffer is still used for one call rather than thrown away. Set `NOTIFICATION_TOKEN_ENCRYPT=true` to encrypt that cache entry with your `APP_KEY` — worth doing when the store is shared with anything you don't fully trust.
 4. A fast in-memory copy avoids cache I/O on subsequent calls within the same process.
 5. Fetching happens behind a cache lock. When the cache is cold — a deploy, a Redis restart, an invalidation — one process fetches the token while the others wait and then read its result, instead of twenty workers hitting the throttled token endpoint at once.
-6. If a request receives an `HTTP 401`, the package invalidates the cached token, fetches a fresh one, and replays the request **once**. A second `401` means the credentials themselves are wrong, so it throws instead of hammering the token endpoint.
+6. On `HTTP 401`, the package invalidates the rejected token and replays the request **once**. If another process already cached a replacement, it reuses that token. Otherwise it fetches a fresh one. A second `401` is returned to the caller.
 7. An `HTTP 403` is left alone: the token is valid, the client simply has no permission for that endpoint. Refreshing would drop a healthy token for nothing — see `$e->isForbidden()`.
 8. If all retries fail, an `ApiException` (or `AuthenticationException`) is thrown and the error is logged.
 
@@ -226,7 +226,7 @@ $notification = $notifier->send(new SendNotificationData(
                    ->title('New Order')
                    ->body('Your order #1234 has been confirmed.')
                    ->url('https://app.example.com/orders/1234')
-                   ->data(['order_id' => 1234]),
+                   ->data(['order_id' => '1234']), // data values must be strings
     channel:   'push',
 ));
 ```
@@ -642,6 +642,22 @@ $notifier = new NotificationClient($apiClient);
 | `updatedAt` | `CarbonImmutable\|null` | Null when the service didn't send one |
 
 ---
+
+## Upgrading the token cache
+
+The cache now stores a scalar array under `token.cache_key` plus `:v2`. This works
+with Laravel's `cache.serializable_classes=false`; encryption remains optional.
+Old entries are ignored and expire normally. Deploying this change causes one
+initial token fetch for each shared cache key. Old and new workers can run together
+because they use separate entries. Restart long-running workers after deployment.
+
+`TokenManagerInterface` is unchanged. Invalidation uses the last token returned by
+that manager to preserve a replacement written by another process. Comparison and
+deletion use the same cache lock as refresh on stores supporting locks.
+
+Push data values must be strings. Invalid values now throw `InvalidInputException`
+before any HTTP request. Notification and batch lookup IDs cannot be blank and are
+encoded as one URL path segment.
 
 ## Documentation
 

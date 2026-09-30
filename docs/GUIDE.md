@@ -240,7 +240,7 @@ $notifier->send(new SendNotificationData(
                    ->title('New Order')
                    ->body('Your order #1234 has been confirmed.')
                    ->url('https://app.example.com/orders/1234')
-                   ->data(['order_id' => 1234]),   // extra key/value data
+                   ->data(['order_id' => '1234']),   // extra key/value data; values must be strings
     channel:   'push',
 ));
 ```
@@ -648,37 +648,29 @@ interface PayloadInterface
 }
 ```
 
-So to support a payload shape the built-in classes don't cover, write your own. Example — a hypothetical "voice
-call" payload:
+You can wrap a supported payload in your own class. For example, an SMS login code:
 
-**Step 1 — create the class** (anywhere in your app, e.g. `app/Notifications/Payloads/VoicePayload.php`):
+**Step 1 — create the class** (e.g. `app/Notifications/Payloads/OtpSmsPayload.php`):
 
 ```php
 namespace App\Notifications\Payloads;
 
 use Esanj\NotificationClient\Contracts\PayloadInterface;
 
-final class VoicePayload implements PayloadInterface
+final class OtpSmsPayload implements PayloadInterface
 {
     private function __construct(
-        private readonly string $text,
-        private readonly int $repeat,
+        private readonly string $code,
     ) {}
 
-    public static function make(string $text, int $repeat = 1): self
+    public static function make(string $code): self
     {
-        return new self($text, $repeat);
+        return new self($code);
     }
 
     public function toArray(): array
     {
-        // Must match exactly what the microservice expects for this channel.
-        return [
-            'voice' => [
-                'text'   => $this->text,
-                'repeat' => $this->repeat,
-            ],
-        ];
+        return ['message' => "Your login code is {$this->code}"];
     }
 }
 ```
@@ -686,16 +678,19 @@ final class VoicePayload implements PayloadInterface
 **Step 2 — use it like any built-in payload:**
 
 ```php
-use App\Notifications\Payloads\VoicePayload;
+use App\Notifications\Payloads\OtpSmsPayload;
+use Esanj\NotificationClient\DTOs\SendNotificationData;
 
 $notifier->send(new SendNotificationData(
     recipient: '+989123456789',
-    payload:   VoicePayload::make('Your code is 1234', repeat: 2),
-    channel:   'voice',
+    payload:   OtpSmsPayload::make('1234'),
+    channel:   'sms',
 ));
 ```
 
-That's it. Because `SendNotificationData` accepts **any** `PayloadInterface`, your class plugs straight in.
+`SendNotificationData` accepts any `PayloadInterface`, but its output must satisfy the service's rules for
+the selected channel. Channels are limited to `sms`, `email`, and `push`. A new channel needs support in
+both the service and the client's channel enum.
 
 > ✅ **Tip — copy the closest built-in.** Look at `src/DTOs/Payloads/` for a class similar to what you need
 > (`SmsPayload` for a simple value, `EmailPayload` for a fluent builder) and adapt its `toArray()` shape.
@@ -809,15 +804,16 @@ File: `config/esanj/notification.php`. Internally read via the key `esanj.notifi
 | `client_secret`          | `NOTIFICATION_CLIENT_SECRET`       | *(none)*                             | OAuth client secret.                                        |
 | `token.cache_store`      | `NOTIFICATION_TOKEN_CACHE_STORE`   | `null` → app default store           | Which cache store holds the access token. **Must be shared by every process** — see below. |
 | `token.cache_key`        | `NOTIFICATION_TOKEN_CACHE_KEY`     | `esanj_notification_access_token`    | Cache key for the token.                                     |
-| `token.buffer_seconds`   | —                                  | `60`                                 | Refresh the token this many seconds **before** it expires. Must be shorter than the service's `expires_in`. |
+| `token.buffer_seconds`   | —                                  | `60`                                 | Refresh this many seconds before expiry. Shorter-lived tokens are still used for one call. |
 | `token.encrypt`          | `NOTIFICATION_TOKEN_ENCRYPT`       | `false`                              | Encrypt the cached token with `APP_KEY` instead of storing it as-is. |
 | `retry.attempts`         | —                                  | `3`                                  | Total attempts per retryable request (`1` = no retry).       |
 | `retry.sleep_ms`         | —                                  | `1000`                               | Base delay between retries: doubles per attempt (capped at 10s), half of each delay randomised. `0` disables waiting. |
 | `idempotency.enabled`    | `NOTIFICATION_IDEMPOTENCY`         | `false`                              | Service honours `Idempotency-Key`; makes sends retryable.    |
-| `timeout`                | —                                  | `30`                                 | HTTP request timeout, in seconds.                            |
+| `timeout`                | `NOTIFICATION_TIMEOUT`             | `30`                                 | Seconds to wait for a complete response.                     |
+| `connect_timeout`        | `NOTIFICATION_CONNECT_TIMEOUT`     | `10`                                 | Seconds to wait for the connection to open.                  |
 | `logging.channel`        | `NOTIFICATION_LOG_CHANNEL`         | `null` → app default channel         | Log channel for the package's warnings/errors.               |
 
-> To change `retry`, `timeout`, or `buffer_seconds`, edit `config/esanj/notification.php` directly (these have no
+> To change `retry` or `buffer_seconds`, edit `config/esanj/notification.php` directly (these have no
 > env shortcuts), then run `php artisan config:clear`.
 
 > 🔒 **Whoever can read your cache can send notifications as you.** By default the access token sits in the cache
@@ -879,15 +875,15 @@ HTTPS URL, or — if this environment isn't really production — fix `APP_ENV`.
 Your `NOTIFICATION_CLIENT_ID` / `NOTIFICATION_CLIENT_SECRET` are wrong, or `NOTIFICATION_SERVICE_URL` is
 unreachable. Double-check `.env`, then `php artisan config:clear`.
 
-**`AuthenticationException: ... token response without a numeric "expires_in"`**
+**`AuthenticationException: ... token response without a usable "expires_at" or numeric "expires_in"`**
 The token endpoint answered without saying how long the token lives, so the client refuses it. Left unchecked, that
 missing field would cast to `0`, every token would count as expired the moment it was issued, and the client would
 re-login on every single call until the endpoint started returning `429`. The message lists the keys that did
 arrive — take it to whoever owns the service.
 
-**`AuthenticationException: Token lifetime (Ns) is not greater than the configured buffer (Ms)`**
-The service issues short-lived tokens and `token.buffer_seconds` eats the whole lifetime. Lower `buffer_seconds`
-below the real `expires_in`, or have the service issue longer-lived tokens.
+**`AuthenticationException: ... returned an access token that has already expired (Ns ago)`**
+The service returned a token whose expiry is already in the past. Check the service clock and its token cache.
+A token whose remaining lifetime is shorter than `token.buffer_seconds` is used for one call and is not rejected.
 
 **Log line: `Access token was fetched repeatedly in a short window`**
 The cached token isn't being reused — three or more logins within a minute from one process. Check that
