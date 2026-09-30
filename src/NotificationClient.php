@@ -6,6 +6,7 @@ use Esanj\NotificationClient\Contracts\NotificationClientInterface;
 use Esanj\NotificationClient\DTOs\NotificationFilter;
 use Esanj\NotificationClient\DTOs\SendBatchNotificationData;
 use Esanj\NotificationClient\DTOs\SendNotificationData;
+use Esanj\NotificationClient\Exceptions\InvalidInputException;
 use Esanj\NotificationClient\Http\ApiClient;
 use Esanj\NotificationClient\Resources\BatchResource;
 use Esanj\NotificationClient\Resources\NotificationResource;
@@ -34,7 +35,7 @@ class NotificationClient implements NotificationClientInterface
 
     public function getNotification(string $uuid): NotificationResource
     {
-        $response = $this->apiClient->get("api/v1/notifications/{$uuid}");
+        $response = $this->apiClient->get('api/v1/notifications/' . $this->pathSegment($uuid));
         return NotificationResource::fromArray($this->item($response));
     }
 
@@ -65,7 +66,7 @@ class NotificationClient implements NotificationClientInterface
 
     public function getBatch(string $uuid): BatchResource
     {
-        $response = $this->apiClient->get("api/v1/notification-batches/{$uuid}");
+        $response = $this->apiClient->get('api/v1/notification-batches/' . $this->pathSegment($uuid));
         return BatchResource::fromArray($this->item($response));
     }
 
@@ -129,6 +130,15 @@ class NotificationClient implements NotificationClientInterface
     private function item(array $response): array
     {
         return $response['data'] ?? $response;
+    }
+
+    private function pathSegment(string $uuid): string
+    {
+        if (trim($uuid) === '') {
+            throw new InvalidInputException('The uuid must not be empty.');
+        }
+
+        return rawurlencode($uuid);
     }
 
     private function perPage(int $perPage): int

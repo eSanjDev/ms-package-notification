@@ -3,6 +3,7 @@
 namespace Esanj\NotificationClient\DTOs\Payloads;
 
 use Esanj\NotificationClient\Contracts\PayloadInterface;
+use Esanj\NotificationClient\Exceptions\InvalidInputException;
 
 final class PushPayload implements PayloadInterface
 {
@@ -49,6 +50,16 @@ final class PushPayload implements PayloadInterface
 
     public function data(array $data): self
     {
+        foreach ($data as $key => $value) {
+            if (!is_string($value)) {
+                throw new InvalidInputException(sprintf(
+                    'Push data values must be strings; "%s" is %s.',
+                    $key,
+                    get_debug_type($value),
+                ));
+            }
+        }
+
         $clone = clone $this;
         $clone->data = $data;
         return $clone;

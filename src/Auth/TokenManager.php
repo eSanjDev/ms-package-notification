@@ -8,6 +8,7 @@ use Esanj\NotificationClient\Exceptions\RateLimitException;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -17,6 +18,8 @@ use Throwable;
 
 class TokenManager implements TokenManagerInterface
 {
+    private const CACHE_FORMAT = 'v2';
+
     private const LOCK_GRACE_SECONDS = 5;
 
     private const LOCK_WAIT_SECONDS = 10;
@@ -53,16 +56,10 @@ class TokenManager implements TokenManagerInterface
 
     public function refresh(): Token
     {
-        $store = $this->cache->getStore();
-
-        if (!$store instanceof LockProvider) {
-            return $this->fetchToken();
+        $lock = $this->refreshLock();
+        if ($lock === null) {
+            return $this->cachedToken() ?? $this->fetchToken();
         }
-
-        $lock = $store->lock(
-            $this->cacheKey . ':lock',
-            max(1, $this->httpTimeoutSeconds) + self::LOCK_GRACE_SECONDS,
-        );
 
         try {
             return $lock->block(
@@ -100,16 +97,22 @@ class TokenManager implements TokenManagerInterface
 
     private function storeToken(Token $token, int $ttl): void
     {
+        $value = [
+            'access_token' => $token->accessToken,
+            'token_type' => $token->tokenType,
+            'expires_at' => $token->expiresAt,
+        ];
+
         $this->cache->put(
-            $this->cacheKey,
-            $this->encrypter ? $this->encrypter->encrypt($token) : $token,
+            $this->storageKey(),
+            $this->encrypter ? $this->encrypter->encrypt($value) : $value,
             $ttl,
         );
     }
 
     private function readToken(): ?Token
     {
-        $value = $this->cache->get($this->cacheKey);
+        $value = $this->cache->get($this->storageKey());
 
         if ($this->encrypter !== null) {
             if (!is_string($value)) {
@@ -123,7 +126,30 @@ class TokenManager implements TokenManagerInterface
             }
         }
 
-        return $value instanceof Token ? $value : null;
+        if (!is_array($value)
+            || !is_string($value['access_token'] ?? null)
+            || trim($value['access_token']) === ''
+            || !is_string($value['token_type'] ?? null)
+            || trim($value['token_type']) === ''
+            || !is_int($value['expires_at'] ?? null)) {
+            return null;
+        }
+
+        return new Token($value['access_token'], $value['token_type'], $value['expires_at']);
+    }
+
+    private function storageKey(): string
+    {
+        return $this->cacheKey . ':' . self::CACHE_FORMAT;
+    }
+
+    private function refreshLock(): ?Lock
+    {
+        $store = $this->cache->getStore();
+
+        return $store instanceof LockProvider
+            ? $store->lock($this->cacheKey . ':lock', max(1, $this->httpTimeoutSeconds) + self::LOCK_GRACE_SECONDS)
+            : null;
     }
 
     /**
@@ -256,7 +282,31 @@ class TokenManager implements TokenManagerInterface
 
     public function invalidate(): void
     {
+        $rejected = $this->runtimeToken;
         $this->runtimeToken = null;
-        $this->cache->forget($this->cacheKey);
+
+        $invalidate = function () use ($rejected): void {
+            $current = $this->readToken();
+
+            // Keep the replacement another process fetched while our request was in flight.
+            if ($rejected !== null && $current !== null && $current->accessToken !== $rejected->accessToken) {
+                return;
+            }
+
+            $this->cache->forget($this->storageKey());
+        };
+
+        $lock = $this->refreshLock();
+        if ($lock === null) {
+            $invalidate();
+            return;
+        }
+
+        try {
+            // Use the refresh lock so comparison and deletion cannot race with a writer.
+            $lock->block(self::LOCK_WAIT_SECONDS, $invalidate);
+        } catch (LockTimeoutException $e) {
+            throw new AuthenticationException('Timed out waiting to invalidate the rejected access token.', previous: $e);
+        }
     }
 }
